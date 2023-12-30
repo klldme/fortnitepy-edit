@@ -3,7 +3,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2021 Terbau
+Copyright (c) 2019-2020 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -37,7 +37,7 @@ from typing import Union, Optional, Any, Awaitable, Callable, Dict, List, Tuple
 from .errors import (PartyError, HTTPException, NotFound, Forbidden,
                      DuplicateFriendship, FriendshipRequestAlreadySent,
                      MaxFriendshipsExceeded, InviteeMaxFriendshipsExceeded,
-                     InviteeMaxFriendshipRequestsExceeded, PartyIsFull)
+                     InviteeMaxFriendshipRequestsExceeded)
 from .xmpp import XMPPClient
 from .http import HTTPClient
 from .user import (ClientUser, User, BlockedUser, SacSearchEntryUser,
@@ -63,11 +63,7 @@ log = logging.getLogger(__name__)
 
 # all credit for this function goes to discord.py.
 def _cancel_tasks(loop: asyncio.AbstractEventLoop) -> None:
-    try:
-        task_retriever = asyncio.Task.all_tasks
-    except AttributeError:
-        task_retriever = asyncio.all_tasks
-
+    task_retriever = asyncio.Task.all_tasks
     tasks = {t for t in task_retriever(loop=loop) if not t.done()}
 
     if not tasks:
@@ -450,7 +446,6 @@ def run_multiple(clients: List['Client'], *,
     except KeyboardInterrupt:
 
         if not _stopped:
-            _stopped = True
             loop.run_until_complete(close_multiple(clients))
     finally:
         future.remove_done_callback(close)
@@ -518,29 +513,8 @@ class Client:
         The host used by Fortnite's XMPP services.
     service_domain: :class:`str`
         The domain used by Fortnite's XMPP services.
-    service_port: :class:`int`
+    serivce_port: :class:`int`
         The port used by Fortnite's XMPP services.
-    cache_users: :class:`bool`
-        Whether or not the library should cache :class:`User` objects. Disable
-        this if you are running a program with lots of users as this could
-        potentially take a big hit on the memory usage. Defaults to ``True``.
-    fetch_user_data_in_events: :class:`bool`
-        Whether or not user data should be fetched in event processing. Disabling
-        this might be useful for larger applications that deals with
-        possibly being rate limited on their ip. Defaults to ``True``.
-
-        .. warning::
-
-            Keep in mind that if this option is disabled, there is a big
-            chance that display names, external auths and more might be missing
-            or simply is ``None`` on objects deriving from :class:`User`. Keep in
-            mind that :attr:`User.id` always will be available. You can use
-            :meth:`User.fetch()` to update all missing attributes.
-    wait_for_member_meta_in_events: :class:`bool`
-        Whether or not the client should wait for party member meta (information
-        about outfit, backpack etc.) before dispatching events like
-        :func:`event_party_member_join()`. If this is disabled then member objects
-        in the events won't have the correct meta. Defaults to ``True``.
 
     Attributes
     ----------
@@ -554,9 +528,11 @@ class Client:
 
     def __init__(self, auth, *,
                  loop: Optional[asyncio.AbstractEventLoop] = None,
+                 cache_users: bool = True,
                  **kwargs: Any) -> None:
 
         self.loop = loop or asyncio.get_event_loop()
+        self.cache_users = cache_users
 
         self.status = kwargs.get('status', 'Battle Royale Lobby - {party_size} / {party_max_size}')  # noqa
         self.away = kwargs.get('away', AwayStatus.ONLINE)
@@ -569,12 +545,10 @@ class Client:
         self.default_party_member_config = kwargs.get('default_party_member_config', DefaultPartyMemberConfig())  # noqa
         self.build = kwargs.get('build', '++Fortnite+Release-14.10-CL-14288110')  # noqa
         self.os = kwargs.get('os', 'Windows/10.0.17134.1.768.64bit')
+
         self.service_host = kwargs.get('xmpp_host', 'prod.ol.epicgames.com')
         self.service_domain = kwargs.get('xmpp_domain', 'xmpp-service-prod.ol.epicgames.com')  # noqa
         self.service_port = kwargs.get('xmpp_port', 5222)
-        self.cache_users = kwargs.get('cache_users', True)
-        self.fetch_user_data_in_events = kwargs.get('fetch_user_data_in_events', True)  # noqa
-        self.wait_for_member_meta_in_events = kwargs.get('wait_for_member_meta_in_events', True)  # noqa
 
         self.kill_other_sessions = True
         self.accept_eula = True
@@ -601,6 +575,7 @@ class Client:
         self._exception_future = self.loop.create_future()
         self._ready_event = asyncio.Event()
         self._closed_event = asyncio.Event()
+        self._leave_lock = asyncio.Lock()
         self._join_party_lock = LockEvent()
         self._internal_join_party_lock = LockEvent()
         self._reauth_lock = LockEvent()
@@ -1215,23 +1190,25 @@ class Client:
         if cache:
             for u in self._users.values():
                 try:
-                    if u.display_name is not None:
-                        if u.display_name.casefold() == display_name.casefold():  # noqa
-                            return u
+                    if u.display_name.casefold() == display_name.casefold():
+                        return u
                 except AttributeError:
                     pass
 
-        try:
-            data = await self.http.account_get_by_display_name(display_name)
-        except HTTPException as e:
-            error_code = 'errors.com.epicgames.account.account_not_found'
-            if e.message_code == error_code:
-                return None
-            raise
+        res = await self.http.account_graphql_get_by_display_name(display_name)
+        accounts = res['account']
+        if len(accounts) == 0:
+            return None
+
+        epic_accounts = [d for d in accounts if d['displayName'] is not None]
+        if epic_accounts:
+            account = max(epic_accounts, key=lambda d: len(d['externalAuths']))
+        else:
+            account = accounts[0]
 
         if raw:
-            return data
-        return self.store_user(data, try_cache=cache)
+            return account
+        return self.store_user(account, try_cache=cache)
 
     fetch_profile_by_display_name = fetch_user_by_display_name
 
@@ -1369,14 +1346,13 @@ class Client:
             if cache:
                 for u in self._users.values():
                     try:
-                        if u.display_name is not None:
-                            if u.display_name.casefold() == dn.casefold():
-                                _users.append(u)
-                                return
+                        if u.display_name.casefold() == dn.casefold():
+                            _users.append(u)
+                            return
                     except AttributeError:
                         pass
 
-            task = self.http.account_get_by_display_name(elem)
+            task = self.http.account_graphql_get_by_display_name(elem)
             tasks.append(task)
 
         for elem in users:
@@ -1395,19 +1371,28 @@ class Client:
 
         if len(tasks) > 0:
             pfs = await asyncio.gather(*tasks)
-            for account_data in pfs:
-                new.append(account_data['id'])
+            for p_data in pfs:
+                accounts = p_data['account']
+                for account_data in accounts:
+                    if account_data['displayName'] is not None:
+                        new.append(account_data['id'])
+                        break
+                else:
+                    for account_data in accounts:
+                        if account_data['displayName'] is None:
+                            new.append(account_data['id'])
+                            break
 
         chunk_tasks = []
         chunks = [new[i:i + 100] for i in range(0, len(new), 100)]
         for chunk in chunks:
-            task = self.http.account_get_multiple_by_user_id(chunk)  # noqa
+            task = self.http.account_graphql_get_multiple_by_user_id(chunk)
             chunk_tasks.append(task)
 
         if len(chunks) > 0:
             d = await asyncio.gather(*chunk_tasks)
             for results in d:
-                for result in results:
+                for result in results['accounts']:
                     if raw:
                         _users.append(result)
                     else:
@@ -1472,6 +1457,8 @@ class Client:
                 return None
             raise
 
+        # Request the account data through graphql since the one above returns
+        # empty external auths payload.
         account_id = res['id']
         return await self.fetch_user(account_id, cache=cache, raw=raw)
 
@@ -1518,7 +1505,6 @@ class Client:
             )
 
         res = await self.http.user_search_by_prefix(
-            self.user.id,
             prefix,
             platform.value
         )
@@ -1601,7 +1587,7 @@ class Client:
 
         users = {}
         tasks = [
-            self.http.account_get_multiple_by_user_id(
+            self.http.account_graphql_get_multiple_by_user_id(
                 chunk,
                 priority=priority
             )
@@ -1613,7 +1599,7 @@ class Client:
             done = []
 
         for results in done:
-            for user in results:
+            for user in results['accounts']:
                 users[user['id']] = user
 
         for friend in raw_friends:
@@ -2463,18 +2449,16 @@ class Client:
                                               end_time: Optional[DatetimeOrTimestamp] = None  # noqa
                                               ) -> List[dict]:
         chunks = [user_ids[i:i+51] for i in range(0, len(user_ids), 51)]
-        stats_chunks = [stats[i:i+20] for i in range(0, len(stats), 20)]
 
         tasks = []
         for chunk in chunks:
-            for stats_chunk in stats_chunks:
-                tasks.append(self.http.stats_get_multiple_v2(
-                    chunk,
-                    stats_chunk,
-                    category=collection,
-                    start_time=start_time,
-                    end_time=end_time
-                ))
+            tasks.append(self.http.stats_get_multiple_v2(
+                chunk,
+                stats,
+                category=collection,
+                start_time=start_time,
+                end_time=end_time
+            ))
 
         results = await asyncio.gather(*tasks)
         return [item for sub in results for item in sub]
@@ -2505,10 +2489,6 @@ class Client:
 
         res = {}
         for udata in results[1]:
-            if udata['accountId'] in res and res[udata['accountId']] is not None:
-                res[udata['accountId']].raw['stats'].update(udata['stats'])
-                continue
-
             r = [x for x in results[0] if x.id == udata['accountId']]
             user = r[0] if len(r) != 0 else None
             res[udata['accountId']] = (cls(user, udata)
@@ -2922,17 +2902,17 @@ class Client:
                         self.user.id,
                         priority=priority
                     )
-
-                    try:
-                        await self.http.party_leave(
-                            data['current'][0]['id'],
-                            priority=priority
-                        )
-                    except HTTPException as e:
-                        m = ('errors.com.epicgames.social.'
-                             'party.party_not_found')
-                        if e.message_code != m:
-                            raise
+                    async with self._leave_lock:
+                        try:
+                            await self.http.party_leave(
+                                data['current'][0]['id'],
+                                priority=priority
+                            )
+                        except HTTPException as e:
+                            m = ('errors.com.epicgames.social.'
+                                 'party.party_not_found')
+                            if e.message_code != m:
+                                raise
 
                     await self.xmpp.leave_muc()
 
@@ -2966,7 +2946,7 @@ class Client:
                     **default_schema,
                     **updated,
                     **edit_updated,
-                    **party._construct_raw_squad_assignments(),
+                    **party.construct_squad_assignments(),
                     **party.meta.set_voicechat_implementation('EOSVoiceChat')
                 },
                 deleted=[*deleted, *edit_deleted],
@@ -3091,8 +3071,6 @@ class Client:
             You are already a member of this party.
         NotFound
             The party was not found.
-        PartyIsFull
-            The party you attempted to join is full.
         Forbidden
             You are not allowed to join this party because it's private
             and you have not been a part of it before.
@@ -3129,12 +3107,6 @@ class Client:
                 if e.message_code == m:
                     raise Forbidden(
                         'You are not allowed to join this party.'
-                    )
-
-                m = 'errors.com.epicgames.social.party.party_is_full'
-                if e.message_code == m:
-                    raise PartyIsFull(
-                        'The party you attempted to join is full.'
                     )
 
                 raise

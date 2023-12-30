@@ -3,7 +3,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2021 Terbau
+Copyright (c) 2019-2020 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,10 +27,10 @@ SOFTWARE.
 import datetime
 
 from typing import TYPE_CHECKING, List, Optional
+from aioxmpp import JID
 
-from .user import UserBase
-from .errors import (FriendOffline, InvalidOffer, PartyError, Forbidden,
-                     HTTPException)
+from .user import UserBase, ExternalAuth
+from .errors import PartyError, Forbidden, HTTPException
 from .presence import Presence
 from .enums import Platform
 
@@ -52,6 +52,27 @@ class FriendBase(UserBase):
         self._status = data['status']
         self._direction = data['direction']
         self._created_at = self.client.from_iso(data['created'])
+
+    @property
+    def display_name(self) -> str:
+        """:class:`str`: The friend's displayname"""
+        return super().display_name
+
+    @property
+    def id(self) -> str:
+        """:class:`str`: The friend's id"""
+        return self._id
+
+    @property
+    def external_auths(self) -> List[ExternalAuth]:
+        """:class:`list`: List containing information about external auths.
+        Might be empty if the friend does not have any external auths"""
+        return self._external_auths
+
+    @property
+    def jid(self) -> JID:
+        """:class:`aioxmpp.JID`: The jid of the friend."""
+        return super().jid
 
     @property
     def status(self) -> str:
@@ -141,6 +162,16 @@ class Friend(FriendBase):
         self._note = _note if _note != '' else None
 
     @property
+    def display_name(self) -> str:
+        """:class:`str`: The friends displayname"""
+        return super().display_name
+
+    @property
+    def id(self) -> str:
+        """:class:`str`: The friends id"""
+        return self._id
+
+    @property
     def favorite(self) -> bool:
         """:class:`bool`: ``True`` if the friend is favorited by :class:`ClientUser`
         else ``False``.
@@ -158,6 +189,13 @@ class Friend(FriendBase):
     def note(self) -> Optional[str]:
         """:class:`str`: The friend's note. ``None`` if no note is set."""
         return self._note
+
+    @property
+    def external_auths(self) -> List[ExternalAuth]:
+        """:class:`list`: List containing information about external auths.
+        Might be empty if the friend does not have any external auths
+        """
+        return self._external_auths
 
     @property
     def last_presence(self) -> Presence:
@@ -456,82 +494,6 @@ class Friend(FriendBase):
             Object representing the sent party invitation.
         """
         return await self.client.party.invite(self.id)
-
-    async def request_to_join(self) -> None:
-        """|coro|
-
-        Sends a request to join a friends party. This is mainly used for
-        requesting to join private parties specifically, but it can be used
-        for all types of party privacies.
-
-        .. warning::
-
-            If the request is accepted by the receiving friend, the bot will
-            receive a regular party invitation. Unlike the fortnite client,
-            fortnitepy will not automatically accept this invitation. You have
-            to make some logic for doing that yourself.
-
-        Raises
-        ------
-        PartyError
-            You are already a part of this friends party.
-        FriendOffline
-            The friend you requested to join is offline.
-        HTTPException
-            An error occured while requesting.
-        """
-        try:
-            await self.client.http.party_send_intention(self.id)
-        except HTTPException as exc:
-            m = 'errors.com.epicgames.social.party.user_already_in_party'
-            if exc.message_code == m:
-                raise PartyError(
-                    'The bot is already a part of this friends party.'
-                )
-
-            m = 'errors.com.epicgames.social.party.user_has_no_party'
-            if exc.message_code == m:
-                raise FriendOffline(
-                    'The friend you requested to join is offline.'
-                )
-
-            raise
-
-    async def owns_offer(self, offer_id: str) -> bool:
-        """|coro|
-
-        Checks if a friend owns a currently active offer in the item shop.
-
-        Raises
-        ------
-        InvalidOffer
-            An invalid/outdated offer_id was passed. Only offers currently in
-            the item shop are valid.
-        HTTPException
-            An error occured while requesting.
-
-        Returns
-        -------
-        :class:`bool`
-            Whether or not the friend owns the offer.
-        """
-        try:
-            await self.client.http.fortnite_check_gift_eligibility(
-                self.id,
-                offer_id,
-            )
-        except HTTPException as exc:
-            m = 'errors.com.epicgames.modules.gamesubcatalog.purchase_not_allowed'  # noqa
-            if exc.message_code == m:
-                return True
-
-            m = 'errors.com.epicgames.modules.gamesubcatalog.catalog_out_of_date'  # noqa
-            if exc.message_code == m:
-                raise InvalidOffer('The offer_id passed is not valid.')
-
-            raise
-
-        return False
 
 
 class PendingFriendBase(FriendBase):
