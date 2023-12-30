@@ -20,9 +20,11 @@ https://fortnitepy.readthedocs.io/en/latest/
 # Installing
 ```
 # windows
+py -3 -m pip install -U git+https://github.com/klldme/fortnitepy-edit
 py -3 -m pip install -U fortnitepy-edit
 
 # linux
+python3 -m pip install -U git+https://github.com/klldme/fortnitepy-edit
 python3 -m pip install -U fortnitepy-edit
 ```
 
