@@ -3,7 +3,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2020 Terbau
+Copyright (c) 2019-2021 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -50,10 +50,12 @@ class ExternalAuth:
         The type/platform of the external auth.
     id: :class:`str`:
         The users universal fortnite id.
-    external_id: :class:`str`:
-        The id belonging to this user on the platform.
+    external_id: Optional[:class:`str`]
+        The id belonging to this user on the platform. This could in some
+        cases be `None`.
     external_display_name: :class:`str`
-        The display name belonging to this user on the platform.
+        The display name belonging to this user on the platform. This could
+        in some cases be `None`.
     extra_info: Dict[:class:`str`, Any]
         Extra info from the payload. Usually empty on accounts other
         than :class:`ClientUser`.
@@ -66,8 +68,13 @@ class ExternalAuth:
         self.client = client
         self.type = data['type']
         self.id = data['accountId']
-        self.external_id = data['externalAuthId']
-        self.external_display_name = data['externalDisplayName']
+
+        if 'authIds' in data:
+            self.external_id = data['authIds'][0]['id'] if data['authIds'] else None  # noqa
+        else:
+            self.external_id = data['externalAuthId']
+
+        self.external_display_name = data.get('externalDisplayName')
 
     def _update_extra_info(self, data: dict) -> None:
         to_be_removed = ('type', 'accountId', 'externalAuthId',
@@ -113,6 +120,9 @@ class UserBase:
         if data:
             self._update(data)
 
+    def __hash__(self) -> int:
+        return hash(self._id)
+
     def __str__(self) -> str:
         return self.display_name
 
@@ -123,14 +133,19 @@ class UserBase:
         return not self.__eq__(other)
 
     @property
-    def display_name(self) -> str:
-        """:class:`str`: The users displayname
+    def display_name(self) -> Optional[str]:
+        """Optional[:class:`str`]: The users displayname
 
         .. warning::
 
             The display name will be the one registered to the epicgames
             account. If an epicgames account is not found it defaults
             to the display name of an external auth.
+
+        .. warning::
+
+            This property might be ``None`` if
+            ``Client.fetch_user_data_in_events`` is set to ``False``.
         """
         return self._epicgames_display_name or self._external_display_name
 
@@ -158,6 +173,12 @@ class UserBase:
             If this is True, the display name will be the one registered to
             the epicgames account, if not it defaults to the display name of
             an external auth.
+
+        .. warning::
+
+            This property might be ``False`` even though the account is a
+            registered epic games account if
+            ``Client.fetch_user_data_in_events`` is set to ``False``.
         """
         return self._epicgames_display_name is not None
 
@@ -165,6 +186,26 @@ class UserBase:
     def jid(self) -> JID:
         """:class:`aioxmpp.JID`: The JID of the user."""
         return JID.fromstr('{0.id}@{0.client.service_host}'.format(self))
+
+    async def fetch(self) -> None:
+        """|coro|
+
+        Fetches basic information about this user and sets the updated
+        properties. This might be useful if you for example need to be
+        sure the display name is updated or if you have
+        ``Client.fetch_user_data_in_events`` set to ``False``.
+
+        Raises
+        ------
+        HTTPException
+            An error occured while requesting.
+        """
+        result = await self.client.http.account_get_multiple_by_user_id(  # noqa
+            (self.id,),
+        )
+        data = result[0]
+
+        self._update(data)
 
     async def fetch_br_stats(self, *,
                              start_time: Optional[DatetimeOrTimestamp] = None,
@@ -311,16 +352,18 @@ class UserBase:
             extra_external_auths=data.get('extraExternalAuths', []),
         )
 
-        self._id = data.get('accountId',
-                            data.get('id', data.get('account_id')))
+        self._id = data.get('id', data.get('accountId', data.get('account_id')))  # noqa
 
     def _update_external_auths(self, external_auths: List[dict], *,
-                               extra_external_auths: List[dict] = []) -> None:
+                               extra_external_auths: Optional[List[dict]] = None  # noqa
+                               ) -> None:
+        extra_external_auths = extra_external_auths or []
         extra_ext = {v['authIds'][0]['type'].split('_')[0].lower(): v
                      for v in extra_external_auths}
 
         ext_list = []
-        for e in external_auths:
+        iterator = external_auths.values() if isinstance(external_auths, dict) else external_auths  # noqa
+        for e in iterator:
             ext = ExternalAuth(self.client, e)
             ext._update_extra_info(extra_ext.get(ext.type, {}))
             ext_list.append(ext)
@@ -417,27 +460,27 @@ class ClientUser(UserBase):
 
     def _update(self, data: dict) -> None:
         super()._update(data)
-        self.name = data.get("name")
-        self.email = data.get("email")
-        self.failed_login_attempts = data.get("failedLoginAttempts")
+        self.name = data['name']
+        self.email = data['email']
+        self.failed_login_attempts = data['failedLoginAttempts']
         self.last_failed_login = (self.client.from_iso(data['lastFailedLogin'])
                                   if 'lastFailedLogin' in data else None)
         self.last_login = (self.client.from_iso(data['lastLogin'])
                            if 'lastLogin' in data else None)
 
-        n_changes = data.get("numberOfDisplayNameChanges")
+        n_changes = data['numberOfDisplayNameChanges']
         self.number_of_display_name_changes = n_changes
-        self.age_group = data.get("ageGroup")
-        self.headless = data.get("headless")
-        self.country = data.get("country")
-        self.last_name = data.get("lastName")
-        self.preferred_language = data.get("preferredLanguage")
-        self.can_update_display_name = data.get("canUpdateDisplayName")
-        self.tfa_enabled = data.get("tfaEnabled")
-        self.email_verified = data.get("emailVerified")
-        self.minor_verified = data.get("minorVerified")
-        self.minor_expected = data.get("minorExpected")
-        self.minor_status = data.get("minorStatus")
+        self.age_group = data['ageGroup']
+        self.headless = data['headless']
+        self.country = data['country']
+        self.last_name = data['lastName']
+        self.preferred_language = data['preferredLanguage']
+        self.can_update_display_name = data['canUpdateDisplayName']
+        self.tfa_enabled = data['tfaEnabled']
+        self.email_verified = data['emailVerified']
+        self.minor_verified = data['minorVerified']
+        self.minor_expected = data['minorExpected']
+        self.minor_status = data['minorStatus']
 
 
 class User(UserBase):

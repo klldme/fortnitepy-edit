@@ -3,7 +3,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2020 Terbau
+Copyright (c) 2019-2021 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -117,7 +117,7 @@ class StatsV2(_StatsBase):
 
             # gets ninjas kd in solo on input touch
             async def get_ninja_touch_solo_kd():
-                user = await client.fetch_user('Ninja)
+                user = await client.fetch_user('Ninja')
                 stats = await client.fetch_br_stats(user.id)
 
                 return stats.get_kd(stats.get_stats()['touch']['defaultsolo'])

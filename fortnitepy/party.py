@@ -3,7 +3,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2020 Terbau
+Copyright (c) 2019-2021 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -33,17 +33,60 @@ import datetime
 
 from typing import (TYPE_CHECKING, Optional, Any, List, Dict, Union, Tuple,
                     Awaitable, Type)
-from .enums import Enum
+from collections import OrderedDict
 
+from .enums import Enum
 from .errors import PartyError, Forbidden, HTTPException, NotFound
 from .user import User
 from .friend import Friend
 from .enums import (PartyPrivacy, PartyDiscoverability, PartyJoinability,
-                    DefaultCharactersChapter1, Region, ReadyState, Platform)
+                    DefaultCharactersChapter2, Region, ReadyState, Platform)
 from .utils import MaybeLock
 
 if TYPE_CHECKING:
     from .client import Client
+
+
+class SquadAssignment:
+    """Represents a party members squad assignment. A squad assignment
+    is basically a piece of information about which position a member
+    has in the party, which is directly related to party teams.
+
+    Parameters
+    ----------
+    position: Optional[:class:`int`]
+        The position a member should have in the party. If no position
+        is passed, a position will be automatically given according to
+        the position priorities set.
+    hidden: :class:`bool`
+        Whether or not the member should be hidden in the party.
+
+        .. warning::
+
+            Being hidden is not a native fortnite feature so be careful
+            when using this. It might lead to undesirable results.
+    """
+
+    __slots__ = ('position', 'hidden')
+
+    def __init__(self, *,
+                 position: Optional[int] = None,
+                 hidden: bool = False) -> None:
+        self.position = position
+        self.hidden = hidden
+
+    def __repr__(self):
+        return ('<SquadAssignment position={0.position!r} '
+                'hidden={0.hidden!r}>'.format(self))
+
+    @classmethod
+    def copy(cls, assignment):
+        self = cls.__new__(cls)
+
+        self.position = assignment.position
+        self.hidden = assignment.hidden
+
+        return self
 
 
 class DefaultPartyConfig:
@@ -55,24 +98,42 @@ class DefaultPartyConfig:
     privacy: Optional[:class:`PartyPrivacy`]
         | The party privacy that should be used.
         | Defaults to: :attr:`PartyPrivacy.PUBLIC`
+    max_size: Optional[:class:`int`]
+        | The maximun party size. Valid party sizes must use a value
+        between 1 and 16.
+        | Defaults to ``16``
+    chat_enabled: Optional[:class:`bool`]
+        | Wether or not the party chat should be enabled for the party.
+        | Defaults to ``True``.
     team_change_allowed: :class:`bool`
         | Whether or not players should be able to manually swap party team
         with another player. This setting only works if the client is the
         leader of the party.
         | Defaults to ``True``
-    max_size: Optional[:class:`int`]
-        | The maximun party size. Valid party sizes must use a value
-        between 1 and 16.
-        | Defaults to ``16``
+    default_squad_assignment: :class:`SquadAssignment`
+        | The default squad assignment to use for new members. Squad assignments
+        holds information about a party member's current position and visibility.
+        Please note that setting a position in the default squad assignment
+        doesnt actually do anything and it will just be overridden.
+        | Defaults to ``SquadAssignment(hidden=False)``.
+    position_priorities: List[int]
+        | A list of exactly 16 ints all ranging from 0-15. When a new member
+        joins the party or a member is not defined in a squad assignment
+        request, it will automatically give the first available position
+        in this list.
+        | Defaults to a list of 0-15 in order.
+    reassign_positions_on_size_change: :class:`bool`
+        | Whether or not positions should be automatically reassigned if the party
+        size changes. Set this to ``False`` if you want members to keep their
+        positions unless manually changed. The reassignment is done according
+        to the position priorities.
+        | Defaults to ``True``.
     joinability: Optional[:class:`PartyJoinability`]
         | The joinability configuration that should be used.
         | Defaults to :attr:`PartyJoinability.OPEN`
     discoverability: Optional[:class:`PartyDiscoverability`]
         | The discoverability configuration that should be used.
         | Defaults to :attr:`PartyDiscoverability.ALL`
-    chat_enabled: Optional[:class:`bool`]
-        | Wether or not the party chat should be enabled for the party.
-        | Defaults to ``True``.
     invite_ttl: Optional[:class:`int`]
         | How many seconds the invite should be valid for before
         automatically becoming invalid.
@@ -98,7 +159,7 @@ class DefaultPartyConfig:
 
             [
                 partial(ClientParty.set_custom_key, 'myawesomekey'),
-                partial(ClientParty.set_playlist, 'Playlist_PlaygroundV2', region=fortnitepy.Region.EUROPE)
+                partial(ClientParty.set_playlist, 'Playlist_PlaygroundV2')
             ]
 
     Attributes
@@ -107,6 +168,15 @@ class DefaultPartyConfig:
         Whether or not players are able to manually swap party team
         with another player. This setting only works if the client is the
         leader of the party.
+    default_squad_assignment: :class:`SquadAssignment`
+        The default squad assignment to use for new members and members
+        not specified in manual squad assignments requests.
+    position_priorities: List[:class:`int`]
+        A list containing exactly 16 integers ranging from 0-16 with no
+        duplicates. This is used for position assignments.
+    reassign_positions_on_size_change: :class:`bool`
+        Whether or not positions will be automatically reassigned when the
+        party size changes.
     cls: Type[:class:`ClientParty`]
         The default party object used to represent the client's party.
     """  # noqa
@@ -114,10 +184,46 @@ class DefaultPartyConfig:
         self.cls = kwargs.pop('cls', ClientParty)
         self._client = None
         self.team_change_allowed = kwargs.pop('team_change_allowed', True)
+        self.default_squad_assignment = kwargs.pop(
+            'default_squad_assignment',
+            SquadAssignment(hidden=False),
+        )
+
+        value = kwargs.pop('position_priorities', None)
+        if value is None:
+            self._position_priorities = list(range(16))
+        else:
+            self.position_priorities = value
+
+        self.reassign_positions_on_size_change = kwargs.pop(
+            'reassign_positions_on_size_change',
+            True
+        )
         self.meta = kwargs.pop('meta', [])
 
         self._config = {}
         self.update(kwargs)
+
+    @property
+    def position_priorities(self):
+        return self._position_priorities
+
+    @position_priorities.setter
+    def position_priorities(self, value):
+        def error():
+            raise ValueError(
+                'position priorities must include exactly 16 integers '
+                'ranging from 0-16.'
+            )
+
+        if len(value) != 16:
+            error()
+
+        for i in range(16):
+            if i not in value:
+                error()
+
+        self._position_priorities = value
 
     def _inject_client(self, client: 'Client') -> None:
         self._client = client
@@ -464,8 +570,9 @@ class PartyMemberMeta(MetaBase):
         self.member = member
 
         self.meta_ready_event = asyncio.Event()
+        self.has_been_updated = True
 
-        self.def_character = DefaultCharactersChapter1.get_random_name()
+        self.def_character = DefaultCharactersChapter2.get_random_name()
         self.schema = {
             'Default:Location_s': 'PreLobby',
             'Default:CampaignHero_j': json.dumps({
@@ -475,22 +582,50 @@ class PartyMemberMeta(MetaBase):
                                  "".format(self.def_character.replace("CID","HID"))),
                 },
             }),
+            'Default:CampaignInfo_j': json.dumps({
+                'CampaignInfo': {
+                    'matchmakingLevel': 0,
+                    'zoneInstanceId': '',
+                    'homeBaseVersion': 1,
+                },
+            }),
             'Default:MatchmakingLevel_U': '0',
             'Default:ZoneInstanceId_s': '',
             'Default:HomeBaseVersion_U': '1',
-            'Default:HasPreloadedAthena_b': 'false',
             'Default:FrontendEmote_j': json.dumps({
                 'FrontendEmote': {
                     'emoteItemDef': 'None',
-                    'emoteItemDefEncryptionKey': '',
+                    'emoteEKey': '',
                     'emoteSection': -1,
                 },
             }),
             'Default:NumAthenaPlayersLeft_U': '0',
             'Default:UtcTimeStartedMatchAthena_s': '0001-01-01T00:00:00.000Z',
-            'Default:HiddenMatchmakingDelayMax_U': '0',
-            'Default:ReadyInputType_s': 'Count',
-            'Default:CurrentInputType_s': 'MouseAndKeyboard',
+            'Default:LobbyState_j': json.dumps({
+                'LobbyState': {
+                    'inGameReadyCheckStatus': None,
+                    'gameReadiness': 'NotReady',
+                    'readyInputType': 'MouseAndKeyboard',
+                    'currentInputType': 'MouseAndKeyboard',
+                    'hiddenMatchmakingDelayMax': 0,
+                    'hasPreloadedAthena': False,
+                },
+            }),
+            'Default:FrontEndMapMarker_j': json.dumps({
+                'FrontEndMapMarker': {
+                    'markerLocation': {
+                        'x': 0,
+                        'y': 0,
+                    },
+                    'bIsSet': False,
+                }
+            }),
+            'Default:AssistedChallengeInfo_j': json.dumps({
+                'AssistedChallengeInfo': {
+                    'questItemDef': 'None',
+                    'objectivesCompleted': 0,
+                },
+            }),
             'Default:MemberSquadAssignmentRequest_j': json.dumps({
                 'MemberSquadAssignmentRequest': {
                     'startingAbsoluteIdx': -1,
@@ -499,43 +634,41 @@ class PartyMemberMeta(MetaBase):
                     'version': 0,
                 },
             }),
-            'Default:AthenaCosmeticLoadout_j': json.dumps(
-                    {
-                      'AthenaCosmeticLoadout': {
-                        'characterPrimaryAssetId': ("AthenaCharacter:{0}".format(self.def_character)),
-                        'characterEKey': '',
-                        'backpackDef': 'None',
-                        'backpackEKey': '',
-                        'pickaxeDef': ("/Game/Athena/Items/Cosmetics/Pickaxes/DefaultPickaxe.DefaultPickaxe"),
-                        'pickaxeEKey': '',
-                        'contrailDef': '/Game/Athena/Items/Cosmetics/Contrails/DefaultContrail.DefaultContrail',
-                        'contrailEKey': '',
-                        'scratchpad': [],
-                        "cosmeticStats": [
-                          {
-                            "statName": "HabaneroProgression", 
-                            "statValue": 0
-                          },
-                          {
-                            "statName": "TotalVictoryCrowns", 
-                            "statValue": 0
-                          },
-                          {
-                            "statName": "TotalRoyalRoyales", 
-                            "statValue": 0
-                          },
-                          {
-                            "statName": "HasCrown", 
-                            "statValue": 0
-                          }
-                        ]
-                      }
-                    }
-              ),
+            'Default:AthenaCosmeticLoadout_j': json.dumps({
+                'AthenaCosmeticLoadout': {
+                    'characterPrimaryAssetId': ("AthenaCharacter:{0}".format(self.def_character)),
+                    'characterEKey': '',
+                    'backpackDef': 'None',
+                    'backpackEKey': '',
+                    'pickaxeDef': ("/Game/Athena/Items/Cosmetics/Pickaxes/DefaultPickaxe.DefaultPickaxe"),
+                    'pickaxeEKey': '',
+                    'contrailDef': '/Game/Athena/Items/Cosmetics/Contrails/DefaultContrail.DefaultContrail',
+                    'contrailEKey': '',
+                    'scratchpad': [],
+                    "cosmeticStats": [
+                              {
+                                "statName": "HabaneroProgression", 
+                                "statValue": 0
+                              },
+                              {
+                                "statName": "TotalVictoryCrowns", 
+                                "statValue": 0
+                              },
+                              {
+                                "statName": "TotalRoyalRoyales", 
+                                "statValue": 0
+                              },
+                              {
+                                "statName": "HasCrown", 
+                                "statValue": 0
+                              }
+                            ]
+                        },
+                    }),
             'Default:AthenaCosmeticLoadoutVariants_j': json.dumps({
                 'AthenaCosmeticLoadoutVariants': {
-                    'vL': {},
-                    "fT": False
+                  'vL': {},
+                  "fT": False
                 }
             }),
             'Default:ArbitraryCustomDataStore_j': json.dumps({
@@ -548,16 +681,6 @@ class PartyMemberMeta(MetaBase):
                     'seasonLevel': 1,
                 },
             }),
-            'Default:LobbyState_j': json.dumps({
-                'LobbyState': {
-                    'inGameReadyCheckStatus': 'None',
-                    'gameReadiness': 'NotReady',
-                    'readyInputType': "Count",
-                    "currentInputType": "MouseAndKeyboard",
-                    "hiddenMatchmakingDelayMax": 0,
-                    "hasPreloadedAthena": False
-                },
-            }),
             'Default:BattlePassInfo_j': json.dumps({
                 'BattlePassInfo': {
                     'bHasPurchasedPass': False,
@@ -566,30 +689,28 @@ class PartyMemberMeta(MetaBase):
                     'friendBoostXp': 0,
                 },
             }),
-            'Default:Platform_j': json.dumps({
-            "PlatformData": {
-                "platform": {
-                    "platformDescription": {
-                        "name": "",
-                        "platformType": "DESKTOP",
-                        "onlineSubsystem": "None",
-                        "sessionType": "",
-                        "externalAccountType": "",
-                        "crossplayPool": "DESKTOP"
-                    }
+            'Default:PlatformData_j': json.dumps({
+                'PlatformData': {
+                    'platform': {
+                        'platformDescription': {
+                            'name': self.member.client.platform.value,
+                            'platformType': 'DESKTOP',
+                            'onlineSubsystem': 'None',
+                            'sessionType': '',
+                            'externalAccountType': '',
+                            'crossplayPool': 'DESKTOP'
+                        },
+                    },
+                    'uniqueId': 'INVALID',
+                    'sessionId': ''
                 },
-                "uniqueId": "INVALID",
-                "sessionId": ""
-              }
-            }
-                                            ),
-            'Default:PlatformUniqueId_s': 'INVALID',
-            'Default:PlatformSessionId_s': '',
+            }),
             'Default:CrossplayPreference_s': 'OptedIn',
             'Default:VoiceChatEnabled_b': 'true',
             'Default:VoiceConnectionId_s': '',
-            'Default:SpectateAPartyMemberAvailable_b': "false",
+            'Default:SpectateAPartyMemberAvailable_b': 'false',
             'Default:FeatDefinition_s': 'None',
+            'Default:SidekickStatus_s': 'None',
             'Default:VoiceChatStatus_s': 'Disabled',
         }
 
@@ -607,36 +728,41 @@ class PartyMemberMeta(MetaBase):
     @property
     def ready(self) -> bool:
         base = self.get_prop('Default:LobbyState_j')
-        return base['LobbyState']['gameReadiness']
+        return base['LobbyState'].get('gameReadiness', 'NotReady')
 
     @property
     def input(self) -> str:
         return self.get_prop('Default:CurrentInputType_s')
 
     @property
+    def assisted_challenge(self) -> str:
+        base = self.get_prop('Default:AssistedChallengeInfo_j')
+        return base['AssistedChallengeInfo'].get('questItemDef', 'None')
+
+    @property
     def outfit(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout']['characterPrimaryAssetId']
+        return base['AthenaCosmeticLoadout'].get('characterPrimaryAssetId', 'None')
 
     @property
     def backpack(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout']['backpackDef']
+        return base['AthenaCosmeticLoadout'].get('backpackDef', 'None')
 
     @property
     def pickaxe(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout']['pickaxeDef']
+        return base['AthenaCosmeticLoadout'].get('pickaxeDef', 'None')
 
     @property
     def contrail(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout']['contrailDef']
+        return base['AthenaCosmeticLoadout'].get('contrailDef', 'None')
 
     @property
     def variants(self) -> List[Dict[str, str]]:
         base = self.get_prop('Default:AthenaCosmeticLoadoutVariants_j')
-        return base['AthenaCosmeticLoadoutVariants']['vL']
+        return base['AthenaCosmeticLoadoutVariants'].get('vL', {})
 
     @property
     def outfit_variants(self) -> List[Dict[str, str]]:
@@ -657,7 +783,7 @@ class PartyMemberMeta(MetaBase):
     @property
     def scratchpad(self) -> list:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout']['scratchpad']
+        return base['AthenaCosmeticLoadout'].get('scratchpad', [])
 
     @property
     def custom_data_store(self) -> list:
@@ -667,7 +793,7 @@ class PartyMemberMeta(MetaBase):
     @property
     def emote(self) -> str:
         base = self.get_prop('Default:FrontendEmote_j')
-        return base['FrontendEmote']['emoteItemDef']
+        return base['FrontendEmote'].get('emoteItemDef', 'None')
 
     @property
     def banner(self) -> Tuple[str, str, int]:
@@ -690,8 +816,8 @@ class PartyMemberMeta(MetaBase):
 
     @property
     def platform(self) -> str:
-        base = self.get_prop('Default:Platform_j')
-        return base['Platform']['platformStr']
+        base = self.get_prop('Default:PlatformData_j')
+        return base['PlatformData']['platform']['platformDescription']['name']
 
     @property
     def location(self) -> str:
@@ -718,29 +844,87 @@ class PartyMemberMeta(MetaBase):
         prop = self.get_prop('Default:MemberSquadAssignmentRequest_j')
         return prop['MemberSquadAssignmentRequest']
 
+    @property
+    def frontend_marker_set(self) -> bool:
+        prop = self.get_prop('Default:FrontEndMapMarker_j')
+        return prop['FrontEndMapMarker'].get('bIsSet', False)
+
+    @property
+    def frontend_marker_location(self) -> Tuple[float, float]:
+        prop = self.get_prop('Default:FrontEndMapMarker_j')
+        location = prop['FrontEndMapMarker'].get('markerLocation')
+        if location is None:
+            return (0.0, 0.0)
+
+        # Swap y and x because epic uses y for horizontal and x for vertical
+        # which messes with my brain.
+        return (location['y'], location['x'])
+
     def maybesub(self, def_: Any) -> Any:
         return def_ if def_ else 'None'
 
+    def set_frontend_marker(self, *,
+                            x: Optional[float] = None,
+                            y: Optional[float] = None,
+                            is_set: Optional[bool] = None
+                            ) -> Dict[str, Any]:
+        prop = self.get_prop('Default:FrontEndMapMarker_j')
+        data = prop['FrontEndMapMarker']
+
+        # Swap y and x because epic uses y for horizontal and x for vertical
+        # which messes with my brain.
+        if x is not None:
+            data['markerLocation']['y'] = x
+        if y is not None:
+            data['markerLocation']['x'] = y
+        if is_set is not None:
+            data['bIsSet'] = is_set
+
+        final = {'FrontEndMapMarker': data}
+        key = 'Default:FrontEndMapMarker_j'
+        return {key: self.set_prop(key, final)}
+
     def set_member_squad_assignment_request(self, current_pos: int,
                                             target_pos: int,
-                                            target_id: str,
-                                            version: int) -> Dict[str, Any]:
+                                            version: int,
+                                            target_id: Optional[str] = None
+                                            ) -> Dict[str, Any]:
         data = {
             'startingAbsoluteIdx': current_pos,
             'targetAbsoluteIdx': target_pos,
-            'swapTargetMemberId': target_id,
+            'swapTargetMemberId': target_id or 'INVALID',
             'version': version,
         }
         final = {'MemberSquadAssignmentRequest': data}
         key = 'Default:MemberSquadAssignmentRequest_j'
         return {key: self.set_prop(key, final)}
 
-    def set_readiness(self, val: str) -> Dict[str, Any]:
-        key = 'Default:LobbyState_j'
+    def set_lobby_state(self, *,
+                        in_game_ready_check_status: Optional[Any] = None,
+                        game_readiness: Optional[str] = None,
+                        ready_input_type: Optional[str] = None,
+                        current_input_type: Optional[str] = None,
+                        hidden_matchmaking_delay_max: Optional[int] = None,
+                        has_pre_loaded_athena: Optional[bool] = None,
+                        ) -> Dict[str, Any]:
         data = (self.get_prop('Default:LobbyState_j'))['LobbyState']
-        data['gameReadiness'] = val
+
+        if in_game_ready_check_status is not None:
+            data['inGameReadyCheckStatus'] = in_game_ready_check_status
+        if game_readiness is not None:
+            data['gameReadiness'] = game_readiness
+        if ready_input_type is not None:
+            data['readyInputType'] = ready_input_type
+        if current_input_type is not None:
+            data['currentInputType'] = current_input_type
+        if hidden_matchmaking_delay_max is not None:
+            data['hiddenMatchmakingDelayMax'] = hidden_matchmaking_delay_max
+        if has_pre_loaded_athena is not None:
+            data['hasPreloadedAthena'] = has_pre_loaded_athena
+
         final = {'LobbyState': data}
-        return {key: self.set_prop(key, val)}
+        key = 'Default:LobbyState_j'
+        return {key: self.set_prop(key, final)}
 
     def set_emote(self, emote: Optional[str] = None, *,
                   emote_ekey: Optional[str] = None,
@@ -750,7 +934,7 @@ class PartyMemberMeta(MetaBase):
         if emote is not None:
             data['emoteItemDef'] = self.maybesub(emote)
         if emote_ekey is not None:
-            data['emoteItemDefEncryptionKey'] = emote_ekey
+            data['emoteEKey'] = emote_ekey
         if section is not None:
             data['emoteSection'] = section
 
@@ -758,6 +942,20 @@ class PartyMemberMeta(MetaBase):
         key = 'Default:FrontendEmote_j'
         return {key: self.set_prop(key, final)}
 
+    def set_assisted_challenge(self, quest: Optional[str] = None, *,
+                               completed: Optional[int] = None
+                               ) -> Dict[str, Any]:
+        prop = self.get_prop('Default:AssistedChallengeInfo_j')
+        data = prop['AssistedChallenge_j']
+
+        if quest is not None:
+            data['questItemDef'] = self.maybesub(quest)
+        if completed is not None:
+            data['objectivesCompleted'] = completed
+
+        final = {'AssistedChallengeInfo': data}
+        key = 'Default:AssistedChallengeInfo_j'
+        return {key: self.set_prop(key, final)}
 
     def set_banner(self, banner_icon: Optional[str] = None, *,
                    banner_color: Optional[str] = None,
@@ -913,9 +1111,9 @@ class PartyMeta(MetaBase):
                     'playlistName': 'Playlist_DefaultDuo',
                     'tournamentId': '',
                     'eventWindowId': '',
-                    'regionId': 'EU',
                 },
             }),
+            'Default:RegionId_s': 'EU',
             'Default:AthenaSquadFill_b': 'true',
             'Default:AllowJoinInProgress_b': 'false',
             'Default:LFGTime_s': '0001-01-01T00:00:00.000Z',
@@ -955,12 +1153,15 @@ class PartyMeta(MetaBase):
 
         return (info['playlistName'],
                 info['tournamentId'],
-                info['eventWindowId'],
-                info['regionId'])
+                info['eventWindowId'])
 
     @property
     def squad_fill(self) -> bool:
         return self.get_prop('Default:AthenaSquadFill_b')
+
+    @property
+    def region(self) -> Region:
+        return Region(self.get_prop('Default:RegionId_s'))
 
     @property
     def privacy(self) -> Optional[PartyPrivacy]:
@@ -996,8 +1197,7 @@ class PartyMeta(MetaBase):
 
     def set_playlist(self, playlist: Optional[str] = None, *,
                      tournament: Optional[str] = None,
-                     event_window: Optional[str] = None,
-                     region: Optional[Region] = None) -> Dict[str, Any]:
+                     event_window: Optional[str] = None) -> Dict[str, Any]:
         data = (self.get_prop('Default:PlaylistData_j'))['PlaylistData']
 
         if playlist is not None:
@@ -1006,12 +1206,14 @@ class PartyMeta(MetaBase):
             data['tournamentId'] = tournament
         if event_window is not None:
             data['eventWindowId'] = event_window
-        if region is not None:
-            data['regionId'] = region
 
         final = {'PlaylistData': data}
         key = 'Default:PlaylistData_j'
         return {key: self.set_prop(key, final)}
+
+    def set_region(self, region: Region) -> Dict[str, Any]:
+        key = 'Default:RegionId_s'
+        return {key: self.set_prop(key, region.value)}
 
     def set_custom_key(self, key: str) -> Dict[str, Any]:
         _key = 'Default:CustomMatchKey_s'
@@ -1127,9 +1329,16 @@ class PartyMemberBase(User):
         | 8-11 = Team 3
         | 12-15 = Team 4
         """
-        for pos_data in self.party.meta.squad_assignments:
-            if pos_data['memberId'] == self.id:
-                return pos_data['absoluteMemberIdx']
+        member = self.party.get_member(self.id)
+        return self.party.squad_assignments[member].position
+
+    @property
+    def hidden(self) -> bool:
+        """:class:`bool`: Whether or not the member is currently hidden in the
+        party. A member can only be hidden if a bot is the leader, therefore
+        this attribute rarely is used."""
+        member = self.party.get_member(self.id)
+        return self.party.squad_assignments[member].hidden
 
     @property
     def platform(self) -> Platform:
@@ -1192,6 +1401,17 @@ class PartyMemberBase(User):
     def input(self) -> str:
         """:class:`str`: The input type this user is currently using."""
         return self.meta.input
+
+    @property
+    def assisted_challenge(self) -> str:
+        """:class:`str`: The current assisted challenge chosen by this member.
+        ``None`` if no assisted challenge is set.
+        """
+        asset = self.meta.assisted_challenge
+        result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
+
+        if result is not None and result[1] != 'None':
+            return result.group(1)
 
     @property
     def outfit(self) -> str:
@@ -1408,6 +1628,33 @@ class PartyMemberBase(User):
         """
         return self.meta.players_left
 
+    def lobby_map_marker_is_visible(self) -> bool:
+        """Whether or not this members lobby map marker is currently visible.
+
+        Returns
+        -------
+        :class:`bool`
+            ``True`` if this members lobby map marker is currently visible else
+            ``False``.
+        """
+        return self.meta.frontend_marker_set
+
+    @property
+    def lobby_map_marker_coordinates(self) -> Tuple[float, float]:
+        """Tuple[:class:`float`, :class:`float`]: A tuple containing the x and y
+        coordinates of this members current lobby map marker.
+
+        .. note::
+
+            Check if the marker is currently visible with
+            :meth:`PartyMember.lobby_map_marker_is_visible()`.
+
+        .. note::
+
+            The coordinates range is roughly ``-135000.0 <= coordinate <= 135000``
+        """  # noqa
+        return self.meta.frontend_marker_location
+
     def is_ready(self) -> bool:
         """Whether or not this member is ready.
 
@@ -1485,9 +1732,6 @@ class PartyMemberBase(User):
 
         Parameters
         ----------
-        item: :class:`str`
-            The variant item type. This defaults to ``AthenaCharacter`` which
-            is what you want to use if you are changing skin variants.
         config_overrides: Dict[:class:`str`, :class:`str`]
             A config that overrides the default config for the variant
             backend names. Example: ::
@@ -1667,7 +1911,7 @@ class PartyMember(PartyMemberBase):
     async def swap_position(self) -> None:
         """|coro|
 
-        Swaps the clients team position with this member.
+        Swaps the clients party position with this member.
 
         Raises
         ------
@@ -1675,12 +1919,12 @@ class PartyMember(PartyMemberBase):
             An error occured while requesting.
         """
         me = self.party.me
-        me._assignment_version += 1
-        prop = self.meta.set_member_squad_assignment_request(
+        version = me._assignment_version + 1
+        prop = me.meta.set_member_squad_assignment_request(
             me.position,
             self.position,
-            self.id,
-            me._assignment_version
+            version,
+            target_id=self.id,
         )
 
         if not me.edit_lock.locked():
@@ -1708,6 +1952,7 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         self._config_cache = {}
         self.patch_lock = asyncio.Lock()
         self.edit_lock = asyncio.Lock()
+        self._dummy = False
 
         super().__init__(client, party, data)
 
@@ -1720,6 +1965,9 @@ class ClientPartyMember(PartyMemberBase, Patchable):
                        deleted: Optional[list] = None,
                        overridden: Optional[dict] = None,
                        **kwargs) -> None:
+        if self._dummy:
+            return
+
         await self.client.http.party_update_member_meta(
             party_id=self.party.id,
             user_id=self.id,
@@ -1837,7 +2085,7 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         self._cancel_clear_emote()
 
-        async with self.client._leave_lock:
+        async with self.client._join_party_lock:
             try:
                 await self.client.http.party_leave(self.party.id)
             except HTTPException as e:
@@ -1845,9 +2093,9 @@ class ClientPartyMember(PartyMemberBase, Patchable):
                 if e.message_code != m:
                     raise
 
-        await self.client.xmpp.leave_muc()
-        p = await self.client._create_party()
-        return p
+            await self.client.xmpp.leave_muc()
+            p = await self.client._create_party(acquire=False)
+            return p
 
     async def set_ready(self, state: ReadyState) -> None:
         """|coro|
@@ -1859,10 +2107,10 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         state: :class:`ReadyState`
             The ready state you wish to set.
         """
-        prop = self.meta.set_readiness(
-            val=state.value
+        prop = self.meta.set_lobby_state(
+            game_readiness=state.value
         )
-        print(prop,"set_ready")
+
         if not self.edit_lock.locked():
             return await self.patch(updated=prop)
 
@@ -1968,10 +2216,6 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         )
 
         if not self.edit_lock.locked():
-            try:
-              await me.patch(updated={**prop, **prop2, **prop3})
-            except:
-              pass
             return await self.patch(updated={**prop, **prop2, **prop3})
 
     async def set_backpack(self, asset: Optional[str] = None, *,
@@ -2029,7 +2273,7 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         if asset is not None:
             if asset != '' and '.' not in asset:
-                asset = ("/BRCosmetics/Athena/Items/Cosmetics/Backpacks/{0}.{0}".format(asset))
+                asset = ("AthenaBackpack:{0}".format(asset))
         else:
             prop = self.meta.get_prop('Default:AthenaCosmeticLoadout_j')
             asset = prop['AthenaCosmeticLoadout']['backpackDef']
@@ -2121,7 +2365,8 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         if asset is not None:
             if asset != '' and '.' not in asset:
-                asset = ("/BRCosmetics/Athena/Items/Cosmetics/PetCarriers/{0}.{0}".format(asset))
+                asset = ("AthenaPetItemDefinition'/Game/Athena/Items/"
+                         "Cosmetics/PetCarriers/{0}.{0}'".format(asset))
         else:
             prop = self.meta.get_prop('Default:AthenaCosmeticLoadout_j')
             asset = prop['AthenaCosmeticLoadout']['backpackDef']
@@ -2189,7 +2434,7 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         if asset is not None:
             if asset != '' and '.' not in asset:
-                asset = ("/BRCosmetics/Athena/Items/Cosmetics/Pickaxes/{0}.{0}".format(asset))
+                asset = ("AthenaPickaxe:{0}".format(asset))
         else:
             prop = self.meta.get_prop('Default:AthenaCosmeticLoadout_j')
             asset = prop['AthenaCosmeticLoadout']['pickaxeDef']
@@ -2315,12 +2560,12 @@ class ClientPartyMember(PartyMemberBase, Patchable):
             An error occured while requesting.
         """
         if asset != '' and '.' not in asset:
-            asset = ("/BRCosmetics/Athena/Items/Cosmetics/Dances/{0}.{0}".format(asset))
+          asset = ("/BRCosmetics/Athena/Items/Cosmetics/Dances/{0}.{0}".format(asset))
 
         prop = self.meta.set_emote(
             emote=asset,
             emote_ekey=key,
-            section=-2
+            section=section
         )
 
         self._cancel_clear_emote()
@@ -2368,7 +2613,8 @@ class ClientPartyMember(PartyMemberBase, Patchable):
             An error occured while requesting.
         """
         if asset != '' and '.' not in asset:
-            asset = ("AthenaDance:.{0}".format(asset))
+            asset = ("/BRCosmetics/Athena/Items/"
+                     "Cosmetics/Dances/Emoji/{0}.{0}".format(asset))
 
         prop = self.meta.set_emote(
             emote=asset,
@@ -2393,7 +2639,13 @@ class ClientPartyMember(PartyMemberBase, Patchable):
     async def _schedule_clear_emote(self, seconds: Union[int, float]) -> None:
         await asyncio.sleep(seconds)
         self.clear_emote_task = None
-        await self.clear_emote()
+
+        try:
+            await self.clear_emote()
+        except HTTPException as exc:
+            m = 'errors.com.epicgames.social.party.member_not_found'
+            if m != exc.message_code:
+                raise
 
     async def clear_emote(self) -> None:
         """|coro|
@@ -2491,7 +2743,101 @@ class ClientPartyMember(PartyMemberBase, Patchable):
 
         if not self.edit_lock.locked():
             return await self.patch(updated=prop)
-          
+
+    async def set_assisted_challenge(self, quest: Optional[str] = None, *,
+                                     num_completed: Optional[int] = None
+                                     ) -> None:
+        """|coro|
+
+        Sets the assisted challenge.
+
+        Parameters
+        ----------
+        quest: Optional[:class:`str`]
+            The quest to set.
+
+            .. note::
+
+                You don't have to include the full path of the quest. The
+                quest id is enough.
+        num_completed: Optional[:class:`int`]
+            How many quests you have completed, I think (didn't test this).
+
+        Raises
+        ------
+        HTTPException
+            An error occured while requesting.
+        """
+        if quest is not None:
+            if quest != '' and '.' not in quest:
+                quest = ("FortQuestItemDefinition'/Game/Athena/Items/"
+                         "Quests/DailyQuests/Quests/{0}.{0}'".format(quest))
+        else:
+            prop = self.meta.get_prop('Default:AssistedChallengeInfo_j')
+            quest = prop['AssistedChallengeInfo']['questItemDef']
+
+        prop = self.meta.set_assisted_challenge(
+            quest=quest,
+            completed=num_completed
+        )
+
+        if not self.edit_lock.locked():
+            return await self.patch(updated=prop)
+
+    async def clear_assisted_challenge(self) -> None:
+        """|coro|
+
+        Clears the currently set assisted challenge.
+
+        Raises
+        ------
+        HTTPException
+            An error occured while requesting.
+        """
+        await self.set_assisted_challenge(quest="")
+
+    async def set_position(self, position: int) -> None:
+        """|coro|
+
+        The the clients party position.
+
+        Parameters
+        ----------
+        position: :class:`int`
+            An integer ranging from 0-15. If a position is already held by
+            someone else, then the client and the existing holder will swap
+            positions.
+
+        Raises
+        ------
+        ValueError
+            The passed position is out of bounds.
+        HTTPException
+            An error occured while requesting.
+        """
+        if position < 0 or position > 15:
+            raise ValueError('The passed position is out of bounds.')
+
+        target_id = None
+        for member, assignment in self.party.squad_assignments.items():
+            if assignment.position == position:
+                if member.id == self.id:
+                    return
+
+                target_id = member.id
+                break
+
+        version = self._assignment_version + 1
+        prop = self.meta.set_member_squad_assignment_request(
+            self.position,
+            position,
+            version,
+            target_id=target_id,
+        )
+
+        if not self.edit_lock.locked():
+            return await self.patch(updated=prop)
+
     async def set_in_match(self, *, players_left: int = 100,
                            started_at: datetime.timedelta = None) -> None:
         """|coro|
@@ -2559,6 +2905,53 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         if not self.edit_lock.locked():
             return await self.patch(updated=prop)
 
+    async def set_lobby_map_marker(self, x: float, y: float) -> None:
+        """|coro|
+
+        Sets the clients lobby map marker.
+
+        Parameters
+        ----------
+        x: :class:`float`
+            The horizontal x coordinate.  The x range is roughly
+            ``-135000.0 <= x <= 135000``.
+        y: :class:`float`
+            The vertical y coordinate. The y range is roughly
+            ``-135000.0 <= y <= 135000``.
+
+        Raises
+        ------
+        HTTPException
+            An error occured while requesting.
+        """
+        prop = self.meta.set_frontend_marker(
+            x=x,
+            y=y,
+            is_set=True,
+        )
+
+        if not self.edit_lock.locked():
+            return await self.patch(updated=prop)
+
+    async def clear_lobby_map_marker(self):
+        """|coro|
+
+        Clears and hides the clients current lobby map marker.
+
+        Raises
+        ------
+        HTTPException
+            An error occured while requesting.
+        """
+        prop = self.meta.set_frontend_marker(
+            x=0.0,
+            y=0.0,
+            is_set=False,
+        )
+
+        if not self.edit_lock.locked():
+            return await self.patch(updated=prop)
+
 
 class JustChattingClientPartyMember(ClientPartyMember):
     """Represents the clients party member in a just chattin state
@@ -2601,6 +2994,7 @@ class PartyBase:
         self._id = data.get('id')
         self._members = {}
         self._applicants = data.get('applicants', [])
+        self._squad_assignments = OrderedDict()
 
         self._update_invites(data.get('invites', []))
         self._update_config(data.get('config'))
@@ -2650,8 +3044,8 @@ class PartyBase:
 
     @property
     def playlist_info(self) -> Tuple[str]:
-        """:class:`tuple`: A tuple containing the name, tournament, event
-        window and region of the currently set playlist.
+        """:class:`tuple`: A tuple containing the name, tournament and
+        event window of the currently set playlist.
 
         Example output: ::
 
@@ -2660,7 +3054,6 @@ class PartyBase:
                 'Playlist_DefaultDuo',
                 '',
                 '',
-                'EU'
             )
 
             # output for arena trios
@@ -2668,7 +3061,6 @@ class PartyBase:
                 'Playlist_ShowdownAlt_Trios',
                 'epicgames_Arena_S10_Trios',
                 'Arena_S10_Division1_Trios',
-                'EU'
             )
         """
         return self.meta.playlist_info
@@ -2679,9 +3071,21 @@ class PartyBase:
         return self.meta.squad_fill
 
     @property
+    def region(self) -> Region:
+        """Optional[:class:`Region`]: The region of the party."""
+        return self.meta.region
+
+    @property
     def privacy(self) -> PartyPrivacy:
         """:class:`PartyPrivacy`: The currently set privacy of this party."""
         return self.meta.privacy
+
+    @property
+    def squad_assignments(self) -> Dict[PartyMember, SquadAssignment]:
+        """Dict[:class:`PartyMember`, :class:`SquadAssignment`]: The squad assignments
+        for this party. This includes information about a members position and
+        visibility."""
+        return self._squad_assignments
 
     def _add_member(self, member: PartyMember) -> None:
         self._members[member.id] = member
@@ -2703,6 +3107,18 @@ class PartyBase:
         """
         return self._members.get(user_id)
 
+    def _update_squad_assignments(self, raw):
+        results = OrderedDict()
+        for data in sorted(raw, key=lambda o: o['absoluteMemberIdx']):
+            member = self.get_member(data['memberId'])
+            if member is None:
+                continue
+
+            assignment = SquadAssignment(position=data['absoluteMemberIdx'])
+            results[member] = assignment
+
+        self._squad_assignments = results
+
     def _update(self, data: dict) -> None:
         try:
             config = data['config']
@@ -2716,8 +3132,20 @@ class PartyBase:
             }
 
         self._update_config({**self.config, **config})
-        self.meta.update(data.get('party_state_updated'), raw=True)
-        self.meta.remove(data['party_state_removed'])
+
+        _update_squad_assignments = False
+
+        if 'party_state_updated' in data:
+            key = 'Default:RawSquadAssignments_j'
+            _assignments = data['party_state_updated'].get(key)
+            if _assignments:
+                if _assignments != self.meta.schema.get(key, ''):
+                    _update_squad_assignments = True
+
+            self.meta.update(data.get('party_state_updated'), raw=True)
+
+        if 'party_state_removed' in data:
+            self.meta.remove(data['party_state_removed'])
 
         privacy = self.meta.get_prop('Default:PrivacySettings_j')
         c = privacy['PrivacySettings']
@@ -2736,15 +3164,27 @@ class PartyBase:
         if found:
             self.config['privacy'] = found
 
-        captain_id = data.get('captain_id')
-        if captain_id is not None:
-            leader = self.leader
-            if leader is not None and captain_id != leader.id:
-                delt = datetime.datetime.utcnow() - leader._role_updated_at
-                if delt.total_seconds() > 3:
-                    member = self.get_member(captain_id)
-                    if member is not None:
-                        self._update_roles(member)
+        # Only update role if the client is not in the party. This is because
+        # we don't want the role being potentially updated before
+        # MEMBER_NEW_CAPTAIN is received which could cause the promote
+        # event to pass two of the same member objects. This piece of code
+        # is essentially just here to update roles of parties that the client
+        # doesn't receive events for.
+        if self.client.user.id not in self._members:
+            captain_id = data.get('captain_id')
+            if captain_id is not None:
+                leader = self.leader
+                if leader is not None and captain_id != leader.id:
+                    delt = datetime.datetime.utcnow() - leader._role_updated_at
+                    if delt.total_seconds() > 3:
+                        member = self.get_member(captain_id)
+                        if member is not None:
+                            self._update_roles(member)
+
+        if _update_squad_assignments:
+            if self.leader.id != self.client.user.id:
+                _assignments = json.loads(_assignments)['RawSquadAssignments']
+                self._update_squad_assignments(_assignments)
 
     def _update_roles(self, new_leader):
         for member in self._members.values():
@@ -2765,6 +3205,7 @@ class PartyBase:
 
     async def _update_members(self, members: Optional[list] = None,
                               remove_missing: bool = True,
+                              fetch_user_data: bool = True,
                               priority: int = 0) -> None:
         client = self.client
         if members is None:
@@ -2787,15 +3228,18 @@ class PartyBase:
 
             if user is not None:
                 raw_users[user.id] = user.get_raw()
+            else:
+                if not fetch_user_data:
+                    raw_users[user_id] = {'id': user_id}
 
         user_ids = [uid for uid in user_ids if uid not in raw_users]
 
         if user_ids:
-            data = await client.http.account_graphql_get_multiple_by_user_id(
+            data = await client.http.account_get_multiple_by_user_id(
                 user_ids,
                 priority=priority
             )
-            for account_data in data['accounts']:
+            for account_data in data:
                 raw_users[account_data['id']] = account_data
 
         result = []
@@ -3014,6 +3458,68 @@ class ClientParty(PartyBase, Patchable):
 
         if new_leader.id == self.client.user.id:
             self.client.party.me.update_role('CAPTAIN')
+        else:
+            self.client.party.me.update_role(None)
+
+    async def _update_members(self, members: Optional[list] = None,
+                              remove_missing: bool = True,
+                              fetch_user_data: bool = True,
+                              priority: int = 0) -> None:
+        result = await super()._update_members(
+            members=members,
+            remove_missing=remove_missing,
+            fetch_user_data=fetch_user_data,
+            priority=priority
+        )
+
+        if not remove_missing:
+            return result
+
+        for member in result:
+            if member.id == self.client.user.id:
+                break
+        else:
+            # There should always be a ClientPartyMember in a ClientParty,
+            # therefore we have to create a dummy until the actual
+            # ClientPartyMember is added at a later stage. We do this to avoid
+            # ClientParty.me being None.
+            default_config = self.client.default_party_member_config
+            now = self.client.to_iso(datetime.datetime.utcnow())
+            platform_s = self.client.platform.value
+            conn_type = default_config.cls.CONN_TYPE
+            external_auths = [
+                x.get_raw() for x in self.client.user.external_auths
+            ]
+
+            data = {
+                'account_id': self.client.user.id,
+                'meta': {},
+                'connections': [
+                    {
+                        'id': str(self.client.xmpp.xmpp_client.local_jid),
+                        'connected_at': now,
+                        'updated_at': now,
+                        'offline_ttl': default_config.offline_ttl,
+                        'yield_leadership': default_config.yield_leadership,
+                        'meta': {
+                            'urn:epic:conn:platform_s': platform_s,
+                            'urn:epic:conn:type_s': conn_type,
+                        }
+                    }
+                ],
+                'revision': 0,
+                'updated_at': now,
+                'joined_at': now,
+                'role': 'MEMBER',
+                'displayName': self.client.user.display_name,
+                'id': self.client.user.id,
+                'externaAuths': external_auths,
+            }
+
+            member = self._create_clientmember(data)
+            member._dummy = True
+
+        return result
 
     async def join_chat(self) -> None:
         await self.client.xmpp.join_muc(self.id)
@@ -3114,8 +3620,7 @@ class ClientParty(PartyBase, Patchable):
         Edits multiple meta parts at once and keeps the changes for when new
         parties are created.
 
-        This example sets the custom key to ``myawesomekey`` and the playlist to Creative
-        in the Europe region.: ::
+        This example sets the custom key to ``myawesomekey`` and the playlist to Creative.: ::
 
             from functools import partial
 
@@ -3123,7 +3628,7 @@ class ClientParty(PartyBase, Patchable):
                 party = client.party
                 await party.edit_and_keep(
                     partial(party.set_custom_key, 'myawesomekey'),
-                    partial(party.set_playlist, 'Playlist_PlaygroundV2', region=fortnitepy.Region.EUROPE)
+                    partial(party.set_playlist, 'Playlist_PlaygroundV2')
                 )
 
         Parameters
@@ -3141,69 +3646,145 @@ class ClientParty(PartyBase, Patchable):
         await super().edit_and_keep(*coros)
 
     def construct_squad_assignments(self,
-                                    new_positions: Dict[str, int] = {}
-                                    ) -> Dict[str, Any]:
-        existing = self.meta.squad_assignments
-        existing_ids = [d['memberId'] for d in existing]
-        taken_pos = set(new_positions.values())
-        to_assign = []
+                                    assignments: Optional[Dict[PartyMember, SquadAssignment]] = None,  # noqa
+                                    new_positions: Optional[Dict[str, int]] = None  # noqa
+                                    ) -> Dict[PartyMember, SquadAssignment]:
+        existing = self._squad_assignments
+
+        results = {}
+        already_assigned = set()
+
+        positions = self._default_config.position_priorities.copy()
+        reassign = self._default_config.reassign_positions_on_size_change
+        default_assignment = self._default_config.default_squad_assignment
+
+        def assign(member, assignment=None, position=True):
+            if assignment is None:
+                assignment = SquadAssignment.copy(default_assignment)
+                position = True
+
+            if str(position) not in ('True', 'False'):
+                assignment.position = position
+                positions.remove(position)
+            elif position:
+                assignment.position = positions.pop(0)
+            else:
+                try:
+                    positions.remove(assignment.position)
+                except ValueError:
+                    pass
+
+            results[member] = assignment
+            already_assigned.add(member.id)
+
+        if new_positions is not None:
+            for user_id, position in new_positions.items():
+                member = self.get_member(user_id)
+                if member is None:
+                    continue
+
+                assignment = existing.get(member)
+                assign(member, assignment, position=position)
+
+        if assignments is not None:
+            for m, assignment in assignments.items():
+                if assignment.position is not None:
+                    try:
+                        positions.remove(assignment.position)
+                    except ValueError:
+                        raise ValueError('Duplicate positions set.')
+                    else:
+                        assign(m, assignment, position=False)
+                else:
+                    assign(m, assignment)
 
         for member in self._members.values():
-            if member.id not in existing_ids:
-                to_assign.append(member)
-
-        new = []
-        for user_id, pos in new_positions.items():
-            new.append({
-                'memberId': user_id,
-                'absoluteMemberIdx': pos
-            })
-
-        i = 0
-
-        def increment():
-            nonlocal i
-
-            i += 1
-            while i in taken_pos:
-                i += 1
-
-        for member_data in existing:
-            user_id = member_data['memberId']
-            if user_id not in self._members:
+            if member.id in already_assigned:
                 continue
 
-            if user_id in new_positions:
+            assignment = existing.get(member)
+            should_reassign = reassign
+            if assignment and assignment.position not in positions:
+                should_reassign = True
+
+            assign(member, assignment, position=should_reassign)
+
+        results = OrderedDict(
+            sorted(results.items(), key=lambda o: o[1].position)
+        )
+
+        self._squad_assignments = results
+        return results
+
+    def _convert_squad_assignments(self, assignments):
+        results = []
+        for member, assignment in assignments.items():
+            if assignment.hidden:
                 continue
 
-            new.append({
-                'memberId': user_id,
-                'absoluteMemberIdx': i
-            })
-            increment()
-
-        assignments = list(sorted(new, key=lambda o: o['absoluteMemberIdx']))
-        if assignments:
-            last_pos = assignments[-1]['absoluteMemberIdx'] + 1
-        else:
-            last_pos = 0
-
-        for i, member in enumerate(to_assign, last_pos):
-            assignments.append({
+            results.append({
                 'memberId': member.id,
-                'absoluteMemberIdx': i
+                'absoluteMemberIdx': assignment.position,
             })
 
-        return self.meta.set_squad_assignments(assignments)
+        return results
+
+    def _construct_raw_squad_assignments(self,
+                                         assignments: Dict[PartyMember, SquadAssignment] = None,  # noqa
+                                         new_positions: Dict[str, int] = None,
+                                         ) -> Dict[str, Any]:
+        ret = self.construct_squad_assignments(
+            assignments=assignments,
+            new_positions=new_positions,
+        )
+        raw = self._convert_squad_assignments(ret)
+        prop = self.meta.set_squad_assignments(raw)
+        return prop
 
     async def refresh_squad_assignments(self,
-                                        new_positions: Dict[str, int] = {},
+                                        assignments: Dict[PartyMember, SquadAssignment] = None,  # noqa
+                                        new_positions: Dict[str, int] = None,
                                         could_be_edit: bool = False) -> None:
-        prop = self.construct_squad_assignments(new_positions=new_positions)
+        prop = self._construct_raw_squad_assignments(
+            assignments=assignments,
+            new_positions=new_positions,
+        )
 
         check = not self.edit_lock.locked() if could_be_edit else True
         if check:
             return await self.patch(updated=prop)
+
+    async def set_squad_assignments(self, assignments: Dict[PartyMember, SquadAssignment]) -> None:  # noqa
+        """|coro|
+
+        Sets squad assignments for members of the party.
+
+        Parameters
+        ----------
+        assignments: Dict[:class:`PartyMember`, :class:`SquadAssignment`]
+            Pre-defined assignments to set. If a member is missing from this
+            dict, they will be automatically added to the final request.
+
+            Example: ::
+
+                {
+                    member1: fortnitepy.SquadAssignment(position=5),
+                    member2: fortnitepy.SquadAssignment(hidden=True)
+                }
+
+        Raises
+        ------
+        ValueError
+            Duplicate positions were set in the assignments.
+        Forbidden
+            You are not the leader of the party.
+        HTTPException
+            An error occured while requesting.
+        """
+        if self.me is not None and not self.me.leader:
+            raise Forbidden('You have to be leader for this action to work.')
+
+        return await self.refresh_squad_assignments(assignments=assignments)
 
     async def _invite(self, friend: Friend) -> None:
         if friend.id in self._members:
@@ -3350,41 +3931,34 @@ class ClientParty(PartyBase, Patchable):
 
     async def set_playlist(self, playlist: Optional[str] = None,
                            tournament: Optional[str] = None,
-                           event_window: Optional[str] = None,
-                           region: Optional[Region] = None) -> None:
+                           event_window: Optional[str] = None) -> None:
         """|coro|
 
         Sets the current playlist of the party.
 
-        Sets the playlist to Duos EU: ::
+        Sets the playlist to Duos: ::
 
             await party.set_playlist(
-                playlist='Playlist_DefaultDuo',
-                region=fortnitepy.Region.EUROPE
+                playlist='Playlist_DefaultDuo'
             )
 
-        Sets the playlist to Arena Trios EU (Replace ``Trios`` with ``Solo``
+        Sets the playlist to Arena Trios (Replace ``Trios`` with ``Solo``
         for arena solo): ::
 
             await party.set_playlist(
                 playlist='Playlist_ShowdownAlt_Trios',
                 tournament='epicgames_Arena_S13_Trios',
-                event_window='Arena_S13_Division1_Trios',
-                region=fortnitepy.Region.EUROPE
+                event_window='Arena_S13_Division1_Trios'
             )
 
         Parameters
         ----------
         playlist: Optional[:class:`str`]
             The name of the playlist.
-            Defaults to :attr:`Region.EUROPE`
         tournament: Optional[:class:`str`]
             The tournament id.
         event_window: Optional[:class:`str`]
             The event window id.
-        region: Optional[:class:`Region`]
-            The region to use.
-            *Defaults to :attr:`Region.EUROPE`*
 
         Raises
         ------
@@ -3394,13 +3968,34 @@ class ClientParty(PartyBase, Patchable):
         if self.me is not None and not self.me.leader:
             raise Forbidden('You have to be leader for this action to work.')
 
-        if region is not None:
-            region = region.value
-
         prop = self.meta.set_playlist(
             playlist=playlist,
             tournament=tournament,
-            event_window=event_window,
+            event_window=event_window
+        )
+        if not self.edit_lock.locked():
+            return await self.patch(updated=prop)
+
+    async def set_region(self, region: Region) -> None:
+        """|coro|
+
+        Sets the region of the party.
+
+        Parameters
+        ----------
+        region: :class:`Region`
+            The region to set.
+
+        Raises
+        ------
+        Forbidden
+            The client is not the leader of the party.
+        """
+
+        if self.me is not None and not self.me.leader:
+            raise Forbidden('You have to be leader for this action to work.')
+
+        prop = self.meta.set_region(
             region=region
         )
         if not self.edit_lock.locked():
@@ -3762,3 +4357,59 @@ class PartyJoinConfirmation:
                 return
 
             raise
+
+
+class PartyJoinRequest:
+    """Represents a party join request. These requests are in most cases
+    only received when the bots party privacy is set to private.
+
+    .. info::
+
+        There is currently no way to reject a join request. The official
+        fortnite client does this by simply ignoring the request and waiting
+        for it to expire.
+
+    Attributes
+    ----------
+    client: :class:`Client`
+        The client.
+    party: :class:`ClientParty`
+        The party the user wants to join.
+    friend: :class:`Friend`
+        The friend who requested to join the party.
+    created_at: :class:`datetime.datetime`
+        The UTC timestamp of when this join request was created.
+    expires_at: :class:`datetime.datetime`
+        The UTC timestamp of when this join request will expire. This
+        should always be one minute after its creation.
+    """
+
+    __slots__ = ('client', 'party', 'friend', 'created_at', 'expires_at')
+
+    def __init__(self, client: 'Client',
+                 party: ClientParty,
+                 friend: User,
+                 data: dict) -> None:
+        self.client = client
+        self.party = party
+        self.friend = friend
+        self.created_at = self.client.from_iso(data['sent_at'])
+        self.expires_at = self.client.from_iso(data['expires_at'])
+
+    async def accept(self):
+        """|coro|
+
+        Accepts a party join request. Accepting this before the request
+        has expired forces the sender to join the party. If not then the
+        sender will receive a regular party invite.
+
+        Raises
+        ------
+        PartyError
+            User is already in your party.
+        PartyError
+            The party is full.
+        HTTPException
+            An error occured while requesting.
+        """
+        return await self.party.invite(self.friend.id)

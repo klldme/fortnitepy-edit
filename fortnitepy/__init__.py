@@ -4,7 +4,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2020 Terbau
+Copyright (c) 2019-2021 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,7 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
-__version__ = '3.3.5'
+__version__ = '3.6.9'
 
 from .client import Client, run_multiple, start_multiple, close_multiple
 from .auth import (Auth, EmailAndPasswordAuth, ExchangeCodeAuth,
@@ -36,7 +36,7 @@ from .message import FriendMessage, PartyMessage
 from .party import (DefaultPartyConfig, DefaultPartyMemberConfig, PartyMember,
                     ClientPartyMember, JustChattingClientPartyMember, Party, 
                     ClientParty, ReceivedPartyInvitation, SentPartyInvitation,
-                    PartyJoinConfirmation)
+                    PartyJoinConfirmation, PartyJoinRequest, SquadAssignment)
 from .presence import Presence, PresenceGameplayStats, PresenceParty
 from .user import (ClientUser, User, BlockedUser, ExternalAuth,
                    UserSearchEntry, SacSearchEntryUser)

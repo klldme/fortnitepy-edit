@@ -3,7 +3,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2020 Terbau
+Copyright (c) 2019-2021 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -30,11 +30,12 @@ import logging
 import json
 import re
 import time
+import functools
 
 from typing import TYPE_CHECKING, List, Optional, Any, Union, Tuple
-from urllib.parse import quote
-from .utils import MaybeLock
+from urllib.parse import quote as urllibquote
 
+from .utils import MaybeLock
 from .errors import HTTPException
 
 if TYPE_CHECKING:
@@ -46,6 +47,12 @@ GRAPHQL_HTML_ERROR_PATTERN = re.compile(
     r'<title>((\d+).*)<\/title>',
     re.MULTILINE
 )
+
+
+def quote(string: str) -> str:
+    string = urllibquote(string)
+    string = string.replace('/', '%2F')
+    return string
 
 
 class HTTPRetryConfig:
@@ -323,6 +330,59 @@ class StatsproxyPublicService(Route):
     AUTH = 'FORTNITE_ACCESS_TOKEN'
 
 
+def create_aiohttp_closed_event(session) -> asyncio.Event:
+    """Work around aiohttp issue that doesn't properly close transports on exit.
+
+    See https://github.com/aio-libs/aiohttp/issues/1925#issuecomment-639080209
+
+    Returns:
+       An event that will be set once all transports have been properly closed.
+    """
+
+    transports = 0
+    all_is_lost = asyncio.Event()
+
+    def connection_lost(exc, orig_lost):
+        nonlocal transports
+
+        try:
+            orig_lost(exc)
+        finally:
+            transports -= 1
+            if transports == 0:
+                all_is_lost.set()
+
+    def eof_received(orig_eof_received):
+        try:
+            orig_eof_received()
+        except AttributeError:
+            # It may happen that eof_received() is called after
+            # _app_protocol and _transport are set to None.
+            pass
+
+    for conn in session.connector._conns.values():
+        for handler, _ in conn:
+            proto = getattr(handler.transport, "_ssl_protocol", None)
+            if proto is None:
+                continue
+
+            transports += 1
+            orig_lost = proto.connection_lost
+            orig_eof_received = proto.eof_received
+
+            proto.connection_lost = functools.partial(
+                connection_lost, orig_lost=orig_lost
+            )
+            proto.eof_received = functools.partial(
+                eof_received, orig_eof_received=orig_eof_received
+            )
+
+    if transports == 0:
+        all_is_lost.set()
+
+    return all_is_lost
+
+
 class HTTPClient:
     def __init__(self, client: 'Client', *,
                  connector: aiohttp.BaseConnector = None,
@@ -377,7 +437,12 @@ class HTTPClient:
     async def close(self) -> None:
         self._jar.clear()
         if self.__session:
+            event = create_aiohttp_closed_event(self.__session)
             await self.__session.close()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
 
     def create_connection(self) -> None:
         self.__session = aiohttp.ClientSession(
@@ -864,9 +929,14 @@ class HTTPClient:
             'captcha': ''
         }
 
+        cookies = {
+            'EPIC_COUNTRY': 'US'
+        }
+
         return await self.post(EpicGames('/id/api/login'),
                                headers=headers,
-                               data=payload)
+                               data=payload,
+                               cookies=cookies)
 
     async def epicgames_mfa_login(self, method: str,
                                   code: str,
@@ -927,13 +997,13 @@ class HTTPClient:
     #           User Search           #
     ###################################
 
-    async def user_search_by_prefix(self, prefix: str, platform: str) -> list:
+    async def user_search_by_prefix(self, client_id: str, prefix: str, platform: str) -> list:
         params = {
             'prefix': prefix,
             'platform': platform
         }
 
-        r = UserSearchService('/api/v1/search')
+        r = UserSearchService('/api/v1/search/{client_id}', client_id=client_id)
         return await self.get(r, params=params)
 
     ###################################
@@ -948,6 +1018,13 @@ class HTTPClient:
     async def account_oauth_grant(self, **kwargs: Any) -> dict:
         r = AccountPublicService('/account/api/oauth/token')
         return await self.post(r, **kwargs)
+
+    async def account_put_date_of_birth_correction(self, continuation: str, date_of_birth: str, auth: str):
+        r = AccountPublicService(
+            '/account/api/public/corrections/dateOfBirth',
+        )
+
+        return await self.put(r, json={ 'continuation': continuation, 'dateOfBirth': date_of_birth }, auth=auth)
 
     async def account_generate_device_auth(self, client_id: str) -> dict:
         r = AccountPublicService(
@@ -1033,10 +1110,11 @@ class HTTPClient:
         return await self.get(r, **kwargs)
 
     async def account_get_multiple_by_user_id(self,
-                                              user_ids: List[str]) -> list:
+                                              user_ids: List[str],
+                                              **kwargs: Any) -> list:
         params = [('accountId', user_id) for user_id in user_ids]
         r = AccountPublicService('/account/api/public/account')
-        return await self.get(r, params=params)
+        return await self.get(r, params=params, **kwargs)
 
     async def account_graphql_get_multiple_by_user_id(self,
                                                       user_ids: List[str],
@@ -1151,6 +1229,16 @@ class HTTPClient:
 
     async def fortnite_get_store_catalog(self) -> dict:
         r = FortnitePublicService('/fortnite/api/storefront/v2/catalog')
+        return await self.get(r)
+
+    async def fortnite_check_gift_eligibility(self,
+                                              user_id: str,
+                                              offer_id: str) -> Any:
+        r = FortnitePublicService(
+            '/fortnite/api/storefront/v2/gift/check_eligibility/recipient/{user_id}/offer/{offer_id}',  # noqa
+            user_id=user_id,
+            offer_id=offer_id,
+        )
         return await self.get(r)
 
     async def fortnite_get_timeline(self) -> dict:
@@ -1488,6 +1576,18 @@ class HTTPClient:
              '{client_id}/join'),
             party_id=party_id,
             client_id=self.client.user.id
+        )
+        return await self.post(r, json=payload)
+
+    async def party_send_intention(self, user_id: str) -> dict:
+        payload = {
+            'urn:epic:invite:platformdata_s': '',
+        }
+
+        r = PartyService(
+            '/party/api/v1/Fortnite/members/{user_id}/intentions/{client_id}',
+            client_id=self.client.user.id,
+            user_id=user_id
         )
         return await self.post(r, json=payload)
 

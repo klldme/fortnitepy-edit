@@ -4,7 +4,7 @@
 """
 MIT License
 
-Copyright (c) 2019-2020 Terbau
+Copyright (c) 2019-2021 Terbau
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -155,6 +155,7 @@ class V2Input(Enum):
 class Region(Enum):
     NAEAST     = 'NAE'
     NAWEST     = 'NAW'
+    NACENTRAL  = 'NAC'
     EUROPE     = 'EU'
     BRAZIL     = 'BR'
     OCEANIA    = 'OCE'
@@ -180,6 +181,7 @@ class UserSearchPlatform(Enum):
     EPIC_GAMES  = 'epic'
     PLAYSTATION = 'psn'
     XBOX        = 'xbl'
+    STEAM       = 'steam'
 
 
 class UserSearchMatchType(Enum):
@@ -215,6 +217,8 @@ class SeasonStartTimestamp(Enum):
     SEASON_13 = 1592352001
     SEASON_14 = 1598486401
     SEASON_15 = 1606867201
+    SEASON_16 = 1615852801
+    SEASON_17 = 1623110401
 
 
 class SeasonEndTimestamp(Enum):
@@ -232,6 +236,8 @@ class SeasonEndTimestamp(Enum):
     SEASON_12 = 1592352000
     SEASON_13 = 1598486400
     SEASON_14 = 1606867200
+    SEASON_15 = 1615852800
+    SEASON_16 = 1623110400
 
 
 class BattlePassStat(Enum):
@@ -239,7 +245,9 @@ class BattlePassStat(Enum):
     SEASON_12 = ('s11_social_bp_level', SeasonEndTimestamp.SEASON_12.value)
     SEASON_13 = (('s13_social_bp_level', 's11_social_bp_level'), SeasonEndTimestamp.SEASON_13.value)
     SEASON_14 = ('s14_social_bp_level', SeasonEndTimestamp.SEASON_14.value)
-    SEASON_15 = ('s15_social_bp_level', None)
+    SEASON_15 = ('s15_social_bp_level', SeasonEndTimestamp.SEASON_15.value)
+    SEASON_16 = ('s16_social_bp_level', SeasonEndTimestamp.SEASON_16.value)
+    SEASON_17 = ('s17_social_bp_level', None)
 
 
 class KairosBackgroundColorPreset(Enum):
