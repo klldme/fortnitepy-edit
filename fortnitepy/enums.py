@@ -128,6 +128,17 @@ class DefaultCharactersChapter2(Enum):
     CID_562_Athena_Commando_M_RebirthDefaultC = 7
     CID_563_Athena_Commando_M_RebirthDefaultD = 8
 
+class DefaultCharactersChapter3(Enum):
+    CID_A_272_Athena_Commando_F_Prime = 1
+    CID_A_274_Athena_Commando_F_Prime_C = 2
+    CID_A_275_Athena_Commando_F_Prime_D = 3
+    CID_A_276_Athena_Commando_F_Prime_E = 4
+    CID_A_278_Athena_Commando_F_Prime_G = 5
+    CID_A_279_Athena_Commando_M_Prime = 6
+    CID_A_280_Athena_Commando_M_Prime_B = 7
+    CID_A_282_Athena_Commando_M_Prime_D = 8
+    CID_A_283_Athena_Commando_M_Prime_E = 9
+    CID_A_284_Athena_Commando_M_Prime_F = 10
 
 class V1Gamemode(Enum):
     SOLO  = 'p2'
