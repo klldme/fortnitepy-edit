@@ -40,7 +40,7 @@ from .errors import PartyError, Forbidden, HTTPException, NotFound
 from .user import User
 from .friend import Friend
 from .enums import (PartyPrivacy, PartyDiscoverability, PartyJoinability,
-                    DefaultCharactersChapter2, Region, ReadyState, Platform)
+                    DefaultCharactersChapter3, Region, ReadyState, Platform)
 from .utils import MaybeLock
 
 if TYPE_CHECKING:
@@ -572,7 +572,7 @@ class PartyMemberMeta(MetaBase):
         self.meta_ready_event = asyncio.Event()
         self.has_been_updated = True
 
-        self.def_character = DefaultCharactersChapter2.get_random_name()
+        self.def_character = DefaultCharactersChapter3.get_random_name()
         self.schema = {
             'Default:Location_s': 'PreLobby',
             'Default:CampaignHero_j': json.dumps({
