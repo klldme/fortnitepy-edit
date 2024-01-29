@@ -32,7 +32,7 @@ ListOrPreset = Optional[Union[List[str], KairosBackgroundColorPreset]]
 
 def get_random_default_avatar() -> 'Avatar':
     return Avatar(
-        asset=DefaultCharactersChapter1.get_random_name(),
+        asset=DefaultCharactersChapter3.get_random_name(),
         background_colors=KairosBackgroundColorPreset.get_random_value()
     )
 
