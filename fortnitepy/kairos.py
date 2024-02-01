@@ -25,7 +25,7 @@ SOFTWARE.
 import json
 
 from typing import List, Optional, Dict, Any, Union
-from .enums import DefaultCharactersChapter1, KairosBackgroundColorPreset
+from .enums import DefaultCharactersChapter3, KairosBackgroundColorPreset
 
 ListOrPreset = Optional[Union[List[str], KairosBackgroundColorPreset]]
 
