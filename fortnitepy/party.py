@@ -2573,8 +2573,13 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         if asset != '' and '.' not in asset:
           asset = ("/BRCosmetics/Athena/Items/Cosmetics/Dances/{0}.{0}".format(asset))
+        else:
+          prop = self.meta.get_prop('Default:FrontendEmote_j')
+          asset = prop['FrontendEmote']['emoteItemDef']
 
-        prop = self.meta.set_emote(
+
+        meta = self.party.me.meta                  
+        prop = meta.set_emote(
             emote=asset,
             emote_ekey=key,
             section=section
@@ -2589,6 +2594,66 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         if not self.edit_lock.locked():
             return await self.patch(updated=prop)
 
+
+    async def set_emote_v2(self, asset: str, *,
+      run_for: Optional[float] = None,
+      key: Optional[str] = None,
+      section: Optional[int] = None) -> None:
+      
+      """|coro|
+
+      Sets the emote of the client.
+
+      Parameters
+      ----------
+      asset: :class:`str`
+          The EID of the emote.
+
+          .. note::
+
+              You don't have to include the full path of the asset. The EID
+              is enough.
+      run_for: Optional[:class:`float`]
+          Seconds the emote should run for before being cancelled. ``None``
+          (default) means it will run indefinitely and you can then clear it
+          with :meth:`PartyMember.clear_emote()`.
+      key: Optional[:class:`str`]
+          The encyption key to use for this emote.
+      section: Optional[:class:`int`]
+          The section.
+
+      Raises
+      ------
+      HTTPException
+          An error occured while requesting.
+      """
+      if asset != '' and '.' not in asset:
+        asset = ("emoteItemDef'/Game/Athena/Items/"
+         "Cosmetics/Dances/{0}.{0}'".format(asset))
+      else:
+        prop = self.meta.get_prop('Default:FrontendEmote_j')
+        asset = prop['FrontendEmote']['emoteItemDef']
+
+
+      
+      meta = self.party.me.meta
+      prop = meta.set_emote(
+        emote=asset, 
+        emote_ekey=key, 
+        section=-2
+      )
+
+
+      
+      self._cancel_clear_emote()
+      if run_for is not None:
+          self.clear_emote_task = self.client.loop.create_task(
+              self._schedule_clear_emote(run_for)
+          )
+      if not self.edit_lock.locked():
+        return await self.patch(updated=prop)
+
+ 
     async def set_emoji(self, asset: str, *,
                         run_for: Optional[float] = 2,
                         key: Optional[str] = None,
