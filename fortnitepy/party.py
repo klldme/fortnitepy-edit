@@ -1563,6 +1563,18 @@ class PartyMemberBase(User):
                 return result.group(1)
 
     @property
+    def emote_v2(self) -> Optional[str]:
+        """Optional[:class:`str`]: The EID of the emote this member is
+        currently playing. ``None`` if no emote is currently playing.
+        """
+        asset = self.meta.emote
+        if '/emoji/' not in asset.lower():
+            result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
+
+            if result is not None and result.group(1) != 'None':
+                return result.group(1)
+
+    @property
     def emoji(self) -> Optional[str]:
         """Optional[:class:`str`]: The ID of the emoji this member is
         currently playing. ``None`` if no emoji is currently playing.
