@@ -567,7 +567,7 @@ class Client:
         self.party_build_id = '1:{0.party_version}:{0.net_cl}'.format(self)
         self.default_party_config = kwargs.get('default_party_config', DefaultPartyConfig())  # noqa
         self.default_party_member_config = kwargs.get('default_party_member_config', DefaultPartyMemberConfig())  # noqa
-        self.build = kwargs.get('build', '++Fortnite+Release-14.10-CL-14288110')  # noqa
+        self.build = kwargs.get('build', '++Fortnite+Release-28.20-CL-31165234')  # noqa
         self.os = kwargs.get('os', 'Windows/10.0.17134.1.768.64bit')
         self.service_host = kwargs.get('xmpp_host', 'prod.ol.epicgames.com')
         self.service_domain = kwargs.get('xmpp_domain', 'xmpp-service-prod.ol.epicgames.com')  # noqa
