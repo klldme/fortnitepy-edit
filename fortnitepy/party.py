@@ -728,7 +728,7 @@ class PartyMemberMeta(MetaBase):
     @property
     def ready(self) -> bool:
         base = self.get_prop('Default:LobbyState_j')
-        return base['LobbyState'].get('gameReadiness', 'NotReady')
+        return base['LobbyState'].get('gameReadiness')
 
     @property
     def input(self) -> str:
@@ -737,32 +737,32 @@ class PartyMemberMeta(MetaBase):
     @property
     def assisted_challenge(self) -> str:
         base = self.get_prop('Default:AssistedChallengeInfo_j')
-        return base['AssistedChallengeInfo'].get('questItemDef', 'None')
+        return base['AssistedChallengeInfo']['questItemDef']
 
     @property
     def outfit(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout'].get('characterPrimaryAssetId', 'None')
+        return base['AthenaCosmeticLoadout']['characterPrimaryAssetId']
 
     @property
     def backpack(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout'].get('backpackDef', 'None')
+        return base['AthenaCosmeticLoadout']['backpackDef']
 
     @property
     def pickaxe(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout'].get('pickaxeDef', 'None')
+        return base['AthenaCosmeticLoadout']['pickaxeDef']
 
     @property
     def contrail(self) -> str:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout'].get('contrailDef', 'None')
+        return base['AthenaCosmeticLoadout']['contrailDef']
 
     @property
     def variants(self) -> List[Dict[str, str]]:
         base = self.get_prop('Default:AthenaCosmeticLoadoutVariants_j')
-        return base['AthenaCosmeticLoadoutVariants'].get('vL', {})
+        return base['AthenaCosmeticLoadoutVariants']['vL']
 
     @property
     def outfit_variants(self) -> List[Dict[str, str]]:
@@ -783,7 +783,7 @@ class PartyMemberMeta(MetaBase):
     @property
     def scratchpad(self) -> list:
         base = self.get_prop('Default:AthenaCosmeticLoadout_j')
-        return base['AthenaCosmeticLoadout'].get('scratchpad', [])
+        return base['AthenaCosmeticLoadout']['scratchpad']
 
     @property
     def custom_data_store(self) -> list:
@@ -793,8 +793,8 @@ class PartyMemberMeta(MetaBase):
     @property
     def emote(self) -> str:
         base = self.get_prop('Default:FrontendEmote_j')
-        return base['FrontendEmote'].get('emoteItemDef', 'None')
-
+        return base['FrontendEmote']['emoteItemDef']
+      
     @property
     def banner(self) -> Tuple[str, str, int]:
         base = self.get_prop('Default:AthenaBannerInfo_j')
@@ -1418,11 +1418,11 @@ class PartyMemberBase(User):
         """:class:`str`: The CID of the outfit this user currently has
         equipped.
         """
-        asset = self.meta.outfit
-        result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
-
-        if result is not None and result.group(1) != 'None':
-            return result.group(1)
+        if self.meta.outfit:
+          asset = self.meta.outfit.split(":")[1]
+        else:
+          asset = None
+        return asset
 
     @property
     def backpack(self) -> str:
@@ -1431,10 +1431,9 @@ class PartyMemberBase(User):
         """
         asset = self.meta.backpack
         if '/petcarriers/' not in asset.lower():
-            result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
-
-            if result is not None and result.group(1) != 'None':
-                return result.group(1)
+          return asset
+        else:
+          return None
 
     @property
     def pet(self) -> str:
@@ -1443,10 +1442,9 @@ class PartyMemberBase(User):
         """
         asset = self.meta.backpack
         if '/petcarriers/' in asset.lower():
-            result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
-
-            if result is not None and result.group(1) != 'None':
-                return result.group(1)
+          return asset
+        else:
+          return None
 
     @property
     def pickaxe(self) -> str:
@@ -1454,10 +1452,7 @@ class PartyMemberBase(User):
         has equipped.
         """
         asset = self.meta.pickaxe
-        result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
-
-        if result is not None and result.group(1) != 'None':
-            return result.group(1)
+        return asset
 
     @property
     def contrail(self) -> str:
