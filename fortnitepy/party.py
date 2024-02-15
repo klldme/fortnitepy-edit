@@ -2280,7 +2280,7 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         if asset is not None:
             if asset != '' and '.' not in asset:
-                asset = ("AthenaBackpack:{0}".format(asset))
+                asset = ("/BRCosmetics/Athena/Items/Cosmetics/Backpacks/{0}.{0}".format(asset))
         else:
             prop = self.meta.get_prop('Default:AthenaCosmeticLoadout_j')
             asset = prop['AthenaCosmeticLoadout']['backpackDef']
@@ -2441,7 +2441,7 @@ class ClientPartyMember(PartyMemberBase, Patchable):
         """
         if asset is not None:
             if asset != '' and '.' not in asset:
-                asset = ("AthenaPickaxe:{0}".format(asset))
+                asset = ("/BRCosmetics/Athena/Items/Cosmetics/Pickaxes/{0}.{0}".format(asset))
         else:
             prop = self.meta.get_prop('Default:AthenaCosmeticLoadout_j')
             asset = prop['AthenaCosmeticLoadout']['pickaxeDef']
