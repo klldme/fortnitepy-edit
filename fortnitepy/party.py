@@ -1431,9 +1431,10 @@ class PartyMemberBase(User):
         """
         asset = self.meta.backpack
         if '/petcarriers/' not in asset.lower():
-          return asset
-        else:
-          return None
+            result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
+
+            if result is not None and result.group(1) != 'None':
+                return result.group(1)
 
     @property
     def pet(self) -> str:
@@ -1452,7 +1453,10 @@ class PartyMemberBase(User):
         has equipped.
         """
         asset = self.meta.pickaxe
-        return asset
+        result = re.search(r".*\.([^\'\"]*)", asset.strip("'"))
+
+        if result is not None and result.group(1) != 'None':
+            return result.group(1)
 
     @property
     def contrail(self) -> str:
