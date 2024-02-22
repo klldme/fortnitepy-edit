@@ -176,7 +176,7 @@ class Region(Enum):
 
 class Platform(Enum):
     WINDOWS       = 'WIN'
-    EPIC_GAMES    = 'epic'
+    EPIC_GAMES    = 'EPIC'
     MAC           = 'MAC'
     PLAYSTATION   = 'PSN'
     PLAYSTATION_4 = 'PSN'
