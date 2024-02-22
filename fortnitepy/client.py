@@ -561,13 +561,13 @@ class Client:
         self.status = kwargs.get('status', 'Battle Royale Lobby - {party_size} / {party_max_size}')  # noqa
         self.away = kwargs.get('away', AwayStatus.ONLINE)
         self.avatar = kwargs.get('avatar', get_random_default_avatar())  # noqa
-        self.platform = kwargs.get('platform', Platform.WINDOWS)
+        self.platform = kwargs.get('platform', Platform.EPIC_GAMES)
         self.net_cl = kwargs.get('net_cl', '')
         self.party_version = kwargs.get('party_version', 3)
         self.party_build_id = '1:{0.party_version}:{0.net_cl}'.format(self)
         self.default_party_config = kwargs.get('default_party_config', DefaultPartyConfig())  # noqa
         self.default_party_member_config = kwargs.get('default_party_member_config', DefaultPartyMemberConfig())  # noqa
-        self.build = kwargs.get('build', '++Fortnite+Release-28.20-CL-31165234')  # noqa
+        self.build = kwargs.get('build', '++Fortnite+Release-28.30-CL-31511038')  # noqa
         self.os = kwargs.get('os', 'Windows/10.0.17134.1.768.64bit')
         self.service_host = kwargs.get('xmpp_host', 'prod.ol.epicgames.com')
         self.service_domain = kwargs.get('xmpp_domain', 'xmpp-service-prod.ol.epicgames.com')  # noqa
