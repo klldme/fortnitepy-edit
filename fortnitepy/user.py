@@ -450,6 +450,12 @@ class ClientUser(UserBase):
     @property
     def full_name(self) -> str:
         return '{} {}'.format(self.name, self.last_name)
+    
+    
+    @property
+    def preferred_language(self) -> str:
+        return self.preferred_language
+    
 
     @property
     def jid(self) -> JID:
