@@ -260,6 +260,7 @@ class BattlePassStat(Enum):
     SEASON_15 = ('s15_social_bp_level', SeasonEndTimestamp.SEASON_15.value)
     SEASON_16 = ('s16_social_bp_level', SeasonEndTimestamp.SEASON_16.value)
     SEASON_17 = ('s17_social_bp_level', None)
+    SEASON_29 = ('s29_social_bp_level', None)
 
 
 class KairosBackgroundColorPreset(Enum):
