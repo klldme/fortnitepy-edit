@@ -95,11 +95,3 @@ How to get a one time authorization code:
 2. Copy the hex part from the url that shows up as showcased by the image below:
 
 ![Authorization Code](https://raw.githubusercontent.com/Terbau/fortnitepy/dev/docs/resources/images/authorization_code.png)
-
-# Credit
-Thanks to [Kysune](https://github.com/SzymonLisowiec), [iXyles](https://github.com/iXyles), [Vrekt](https://github.com/Vrekt) and [amrsatrio](https://github.com/Amrsatrio) for ideas and/or work that this library is built upon.
-
-Also thanks to [discord.py](https://github.com/Rapptz/discord.py) for much inspiration code-wise.
-
-# Need help?
-If you need more help feel free to join this [discord server](https://discord.gg/rnk869s).
